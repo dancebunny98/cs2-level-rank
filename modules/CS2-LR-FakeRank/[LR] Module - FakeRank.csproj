@@ -4,20 +4,28 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- В этой папке лежат исходники ДВУХ проектов (этого модуля и FakeRanksApi) -
+         отключаем авто-glob, чтобы каждый проект собирал только свои файлы -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
-  
+
   <ItemGroup>
-	<PackageReference Include="CounterStrikeSharp.API" Version="*" />
-	<Reference Include="LevelsRanksApi.dll">
-      <HintPath>..\LevelsRanksApi.dll</HintPath>
-    </Reference>	
-	<Reference Include="FakeRanksApi.dll">
-      <HintPath>..\FakeRanksApi.dll</HintPath>
-    </Reference>		
+    <Compile Include="[LR] Module - FakeRank.cs" />
+    <Compile Include="FakeRankApi.cs" />
   </ItemGroup>
- 
+
   <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="*" />
     <PackageReference Include="Dapper" Version="2.1.24" />
     <PackageReference Include="MySqlConnector" Version="2.3.1" />
-  </ItemGroup>  
+
+    <!-- Private=false у обоих: и LevelsRanksApi, и FakeRanksApi - это разделяемые
+         контракты (addons/counterstrikesharp/shared/...), их не нужно копировать
+         в папку каждого плагина - иначе сравнение типов между плагинами
+         (capabilities) сломается, т.к. это будут разные экземпляры одной и той
+         же сборки. -->
+    <ProjectReference Include="..\..\Api\LevelsRanksApi.csproj" Private="false" ExcludeAssets="runtime" />
+    <ProjectReference Include="FakeRanksApi.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+
+        <!-- Core = единая сборка с РЕАЛИЗАЦИЕЙ. Публичный контракт (ILevelsRanksApi,
+             User) живёт отдельно в Api/LevelsRanksApi.csproj и деплоится в shared/ -
+             так его резолвят все плагины (включая сам Core) как одну и ту же сборку. -->
+        <AssemblyName>LVLCore</AssemblyName>
+        <RootNamespace>LevelsRanks</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Зависимости -->
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0"/>
+        <PackageReference Include="CounterStrikeSharp.API" Version="*"/>
+        <PackageReference Include="Dapper" Version="2.1.24"/>
+        <PackageReference Include="MySqlConnector" Version="2.3.1"/>
+
+        <!-- Контракт LevelsRanksApi - разделяемая сборка (shared/LevelsRanksApi/).
+             Private=false: свою копию в папку плагина LVL Core класть не нужно,
+             тогда все плагины (Core и модули) резолвят её из shared/ как одну
+             и ту же сборку, и приведение типов между ними работает. -->
+        <ProjectReference Include="..\Api\LevelsRanksApi.csproj" Private="false" ExcludeAssets="runtime" />
+
+        <!-- MenuManagerApi - внешняя зависимость (плагин MenuManager), файл лежит
+             рядом с этим csproj и не собирается нами -->
+        <Reference Include="MenuManagerApi">
+            <HintPath>MenuManagerApi.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+    </ItemGroup>
+</Project>

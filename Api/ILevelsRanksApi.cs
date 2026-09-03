@@ -8,6 +8,13 @@ namespace LevelsRanksApi
         Task ConnectAsync();
         string? TableName { get; set; }
         string? DbConnectionString { get; }
+        /// <summary>
+        /// Идентификатор этого сервера (настройка lr_server_id в settings.json).
+        /// Используется Core и модулями для того, чтобы несколько серверов CS2 могли
+        /// делить одну базу данных, но хранить свою статистику раздельно, не создавая
+        /// отдельного пользователя под каждый сервер.
+        /// </summary>
+        string ServerId { get; }
         void ApplyExperienceUpdateSync(User user, CCSPlayerController player, int expChange, string eventDescription, string color);
         void ApplyExperienceUpdateSyncWithoutLimits(User user, CCSPlayerController player, int expChange, string eventDescription, char color);
         Task<Dictionary<string, int>> GetCurrentRanksAsync();

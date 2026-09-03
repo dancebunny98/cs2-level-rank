@@ -3,6 +3,7 @@ namespace LevelsRanksApi
     public class User
     {
         public string? SteamId { get; set; }
+        public string? ServerId { get; set; }
         public string? Name { get; set; }
         public int Value { get; set; }
         public int Rank { get; set; }

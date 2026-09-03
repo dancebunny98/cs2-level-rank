@@ -1,0 +1,112 @@
+name: Build LevelsRanks
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: { }
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  CONFIGURATION: Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # LevelsRanksApi (контракт) + LVL Core (реализация) + все не-VIP модули
+      # собираются одним вызовом через .sln.
+      - name: Restore
+        run: dotnet restore "LevelsRanks.sln"
+
+      - name: Build Core + modules
+        run: dotnet build "LevelsRanks.sln" -c ${{ env.CONFIGURATION }} --no-restore
+
+      # VIP-модули зависят от стороннего VipCoreApi.dll, который не хранится в
+      # репозитории (см. libs/README.md). Собираем их отдельно и не роняем
+      # остальную сборку, если файла нет.
+      - name: Check for VipCoreApi.dll
+        id: vipcore
+        run: |
+          if [ -f "libs/VipCoreApi.dll" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::libs/VipCoreApi.dll not found - skipping VIP-модули (CS2-VIP-LR-ExperienceMultiplier, CS2_VIP_LR_CustomFakeRank). See libs/README.md."
+          fi
+
+      - name: Build VIP modules
+        if: steps.vipcore.outputs.present == 'true'
+        run: |
+          dotnet build "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }}
+          dotnet build "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }}
+
+      # Раскладываем всё в структуру addons/counterstrikesharp/..., как её ожидает
+      # CounterStrikeSharp. Разделяемые контракты (LevelsRanksApi.dll с
+      # ILevelsRanksApi, FakeRanksApi.dll с IPlayerRankApi) кладём ТОЛЬКО в
+      # shared/<Package>/ и НЕ дублируем в папках плагинов, включая сам Core
+      # (см. Private=false в csproj) - иначе у разных плагинов будут разные
+      # экземпляры одной и той же сборки, и PluginCapability начнёт падать
+      # с ошибкой приведения типов.
+      # https://docs.cssharp.dev/docs/features/shared-plugin-api.html
+      - name: Stage plugin layout
+        run: |
+          set -e
+          STAGE="dist/addons/counterstrikesharp"
+          mkdir -p "$STAGE/plugins/LVL Core" "$STAGE/shared/LevelsRanksApi" "$STAGE/shared/FakeRanksApi"
+
+          cp -v Core/bin/${{ env.CONFIGURATION }}/net8.0/*.dll "$STAGE/plugins/LVL Core/"
+          cp -v "Api/bin/${{ env.CONFIGURATION }}/net8.0/LevelsRanksApi.dll" "$STAGE/shared/LevelsRanksApi/"
+          cp -v "modules/CS2-LR-FakeRank/bin/${{ env.CONFIGURATION }}/net8.0/FakeRanksApi.dll" "$STAGE/shared/FakeRanksApi/"
+
+          declare -A modules=(
+            ["modules/CS2-LR-FakeRank/[LR] Module - FakeRank"]="LR Module - FakeRank"
+            ["modules/CS2-LR-ExStats-Hits/[LR] Module - ExStats Hits"]="LR Module - ExStats Hits"
+            ["modules/CS2-LR-ExStats-Weapons/[LR] Module - ExStats Weapons"]="LR Module - ExStats Weapons"
+            ["modules/CS2-LR-Module-Tag/[LR] Module - Tag"]="LR Module - Tag"
+          )
+
+          for src in "${!modules[@]}"; do
+            name="${modules[$src]}"
+            out="$STAGE/plugins/$name"
+            mkdir -p "$out"
+            # Private=false в csproj уже исключил LevelsRanksApi.dll/FakeRanksApi.dll
+            # из выходной папки модуля - здесь просто копируем то, что осталось.
+            cp -v "$src/bin/${{ env.CONFIGURATION }}/net8.0/"*.dll "$out/"
+          done
+
+          if [ "${{ steps.vipcore.outputs.present }}" == "true" ]; then
+            mkdir -p "$STAGE/plugins/VIP LR ExperienceMultiplier" "$STAGE/plugins/VIP CustomFakeRank"
+            cp -v "modules/CS2-VIP-LR-ExperienceMultiplier/bin/${{ env.CONFIGURATION }}/net8.0/"*.dll "$STAGE/plugins/VIP LR ExperienceMultiplier/"
+            cp -v "modules/CS2_VIP_LR_CustomFakeRank/bin/${{ env.CONFIGURATION }}/net8.0/"*.dll "$STAGE/plugins/VIP CustomFakeRank/"
+          fi
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LevelsRanks-${{ github.sha }}
+          path: dist/**
+          if-no-files-found: error
+
+      - name: Create release zip
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd dist
+          zip -r "../LevelsRanks-${{ github.ref_name }}.zip" .
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LevelsRanks-${{ github.ref_name }}.zip

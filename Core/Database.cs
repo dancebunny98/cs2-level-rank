@@ -8,14 +8,22 @@ public class Database
 {
     private static string? _connectionString;
     private static string? _tableName;
+
+    // Идентификатор сервера. Позволяет использовать ОДНУ базу/таблицу для нескольких
+    // серверов CS2 без создания отдельного пользователя под каждый сервер:
+    // строки различаются парой (steam, server_id), а не только steam.
+    private static string _serverId = "default";
+
     private readonly ILogger<Database> _logger;
     private readonly LevelsRanks _plugin;
 
-    public Database(LevelsRanks plugin, string? connectionString, string? tableName, ILogger<Database> logger)
+    public Database(LevelsRanks plugin, string? connectionString, string? tableName, string? serverId,
+        ILogger<Database> logger)
     {
         _plugin = plugin;
         _connectionString = connectionString;
         _tableName = tableName;
+        _serverId = string.IsNullOrWhiteSpace(serverId) ? "default" : serverId;
         _logger = logger;
     }
 
@@ -28,8 +36,9 @@ public class Database
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var commandText = $"SELECT `steam`, `rank` FROM `{_tableName}`";
+            var commandText = $"SELECT `steam`, `rank` FROM `{_tableName}` WHERE `server_id` = @serverId";
             await using var command = new MySqlCommand(commandText, connection);
+            command.Parameters.AddWithValue("@serverId", _serverId);
 
             await using var reader = await command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -75,28 +84,13 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        var commandText = $"SELECT * FROM `{_tableName}`";
+        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId";
         await using var command = new MySqlCommand(commandText, connection);
+        command.Parameters.AddWithValue("@serverId", _serverId);
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
-            users.Add(new User
-            {
-                SteamId = reader.GetString("steam"),
-                Name = reader.GetString("name"),
-                Value = reader.GetInt32("value"),
-                Rank = reader.GetInt32("rank"),
-                Kills = reader.GetInt32("kills"),
-                Deaths = reader.GetInt32("deaths"),
-                Shoots = reader.GetInt32("shoots"),
-                Hits = reader.GetInt32("hits"),
-                Headshots = reader.GetInt32("headshots"),
-                Assists = reader.GetInt32("assists"),
-                RoundWin = reader.GetInt32("round_win"),
-                RoundLose = reader.GetInt32("round_lose"),
-                Playtime = reader.GetInt32("playtime"),
-                LastConnect = reader.GetInt32("lastconnect")
-            });
+            users.Add(ReadUser(reader));
 
         return users;
     }
@@ -106,9 +100,14 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
+        // server_id входит в первичный ключ: одна и та же учётная запись (steam) может
+        // иметь независимую строку статистики на каждом сервере, при этом сам игрок
+        // остаётся "одним и тем же" пользователем — отдельная регистрация под каждый
+        // сервер не требуется.
         var commandText = $@"
                 CREATE TABLE IF NOT EXISTS `{_tableName}` (
-                    `steam` VARCHAR(22) PRIMARY KEY,
+                    `steam` VARCHAR(22) NOT NULL,
+                    `server_id` VARCHAR(64) NOT NULL DEFAULT 'default',
                     `name` VARCHAR(32),
                     `value` INT NOT NULL DEFAULT 0,
                     `rank` INT NOT NULL DEFAULT 0,
@@ -121,11 +120,51 @@ public class Database
                     `round_win` INT NOT NULL DEFAULT 0,
                     `round_lose` INT NOT NULL DEFAULT 0,
                     `playtime` INT NOT NULL DEFAULT 0,
-                    `lastconnect` INT NOT NULL DEFAULT 0
+                    `lastconnect` INT NOT NULL DEFAULT 0,
+                    PRIMARY KEY (`steam`, `server_id`),
+                    KEY `idx_server_value` (`server_id`, `value`)
                 );";
 
         await using var command = new MySqlCommand(commandText, connection);
         await command.ExecuteNonQueryAsync();
+
+        await EnsureServerIdColumn(connection);
+    }
+
+    // Мягкая миграция для баз, созданных до появления server_id: если таблица уже
+    // существует в старом виде (steam как единственный PRIMARY KEY, без server_id),
+    // добавляем колонку и переопределяем первичный ключ, не теряя данные.
+    private async Task EnsureServerIdColumn(MySqlConnection connection)
+    {
+        try
+        {
+            var checkColumnText = @"
+                SELECT COUNT(*) FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = @tableName AND COLUMN_NAME = 'server_id';";
+            await using (var checkCommand = new MySqlCommand(checkColumnText, connection))
+            {
+                checkCommand.Parameters.AddWithValue("@tableName", _tableName);
+                var exists = Convert.ToInt32(await checkCommand.ExecuteScalarAsync()) > 0;
+                if (exists) return;
+            }
+
+            _logger.LogWarning(
+                $"Column `server_id` is missing in `{_tableName}`. Running one-time migration to add it (existing rows will be assigned to server_id='default').");
+
+            var alterText = $@"
+                ALTER TABLE `{_tableName}`
+                ADD COLUMN `server_id` VARCHAR(64) NOT NULL DEFAULT 'default' AFTER `steam`,
+                DROP PRIMARY KEY,
+                ADD PRIMARY KEY (`steam`, `server_id`),
+                ADD KEY `idx_server_value` (`server_id`, `value`);";
+            await using var alterCommand = new MySqlCommand(alterText, connection);
+            await alterCommand.ExecuteNonQueryAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                $"Automatic server_id migration for `{_tableName}` failed. Please run the migration SQL manually (see MIGRATION.md): {ex}");
+        }
     }
 
     public async Task<User?> GetUserFromDb(string steamId)
@@ -133,29 +172,14 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        var commandText = $"SELECT * FROM `{_tableName}` WHERE `steam` = @steamId";
+        var commandText = $"SELECT * FROM `{_tableName}` WHERE `steam` = @steamId AND `server_id` = @serverId";
         await using var command = new MySqlCommand(commandText, connection);
         command.Parameters.AddWithValue("@steamId", steamId);
+        command.Parameters.AddWithValue("@serverId", _serverId);
 
         await using var reader = await command.ExecuteReaderAsync();
         if (await reader.ReadAsync())
-            return new User
-            {
-                SteamId = reader.GetString("steam"),
-                Name = reader.GetString("name"),
-                Value = reader.GetInt32("value"),
-                Rank = reader.GetInt32("rank"),
-                Kills = reader.GetInt32("kills"),
-                Deaths = reader.GetInt32("deaths"),
-                Shoots = reader.GetInt32("shoots"),
-                Hits = reader.GetInt32("hits"),
-                Headshots = reader.GetInt32("headshots"),
-                Assists = reader.GetInt32("assists"),
-                RoundWin = reader.GetInt32("round_win"),
-                RoundLose = reader.GetInt32("round_lose"),
-                Playtime = reader.GetInt32("playtime"),
-                LastConnect = reader.GetInt32("lastconnect")
-            };
+            return ReadUser(reader);
 
         return null;
     }
@@ -166,11 +190,12 @@ public class Database
         await connection.OpenAsync();
 
         var commandText = $@"
-                INSERT INTO `{_tableName}` (`steam`, `name`, `value`, `rank`, `kills`, `deaths`, `shoots`, `hits`, `headshots`, `assists`, `round_win`, `round_lose`, `playtime`, `lastconnect`)
-                VALUES (@steam, @name, @value, @rank, @kills, @deaths, @shoots, @hits, @headshots, @assists, @round_win, @round_lose, @playtime, @lastconnect);";
+                INSERT INTO `{_tableName}` (`steam`, `server_id`, `name`, `value`, `rank`, `kills`, `deaths`, `shoots`, `hits`, `headshots`, `assists`, `round_win`, `round_lose`, `playtime`, `lastconnect`)
+                VALUES (@steam, @serverId, @name, @value, @rank, @kills, @deaths, @shoots, @hits, @headshots, @assists, @round_win, @round_lose, @playtime, @lastconnect);";
 
         await using var command = new MySqlCommand(commandText, connection);
         command.Parameters.AddWithValue("@steam", user.SteamId);
+        command.Parameters.AddWithValue("@serverId", _serverId);
         command.Parameters.AddWithValue("@name", user.Name);
         command.Parameters.AddWithValue("@value", user.Value);
         command.Parameters.AddWithValue("@rank", user.Rank);
@@ -195,9 +220,10 @@ public class Database
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var commandText = $"SELECT `rank` FROM `{_tableName}` WHERE `steam` = @steamId";
+            var commandText = $"SELECT `rank` FROM `{_tableName}` WHERE `steam` = @steamId AND `server_id` = @serverId";
             await using var command = new MySqlCommand(commandText, connection);
             command.Parameters.AddWithValue("@steamId", steamId);
+            command.Parameters.AddWithValue("@serverId", _serverId);
 
             var rank = await command.ExecuteScalarAsync();
             return rank != null ? (int?)Convert.ToInt32(rank) : null;
@@ -216,10 +242,11 @@ public class Database
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var commandText = $"UPDATE `{_tableName}` SET `rank` = @newRank WHERE `steam` = @steamId";
+            var commandText = $"UPDATE `{_tableName}` SET `rank` = @newRank WHERE `steam` = @steamId AND `server_id` = @serverId";
             await using var command = new MySqlCommand(commandText, connection);
             command.Parameters.AddWithValue("@newRank", newRank);
             command.Parameters.AddWithValue("@steamId", steamId);
+            command.Parameters.AddWithValue("@serverId", _serverId);
 
             await command.ExecuteNonQueryAsync();
         }
@@ -257,10 +284,11 @@ public class Database
                         `round_lose` = @round_lose, 
                         `playtime` = @playtime, 
                         `lastconnect` = @lastconnect 
-                        WHERE `steam` = @steam;";
+                        WHERE `steam` = @steam AND `server_id` = @serverId;";
 
                 await using var command = new MySqlCommand(commandText, connection, transaction);
                 command.Parameters.AddWithValue("@steam", user.SteamId);
+                command.Parameters.AddWithValue("@serverId", _serverId);
                 command.Parameters.AddWithValue("@name", user.Name);
                 command.Parameters.AddWithValue("@value", user.Value);
                 command.Parameters.AddWithValue("@rank", user.Rank);
@@ -296,29 +324,14 @@ public class Database
             using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var query = $"SELECT * FROM `{_tableName}` WHERE name LIKE @Name LIMIT 1";
+            var query = $"SELECT * FROM `{_tableName}` WHERE `name` LIKE @Name AND `server_id` = @serverId LIMIT 1";
             using var command = new MySqlCommand(query, connection);
             command.Parameters.AddWithValue("@Name", "%" + name + "%");
+            command.Parameters.AddWithValue("@serverId", _serverId);
 
             using var reader = await command.ExecuteReaderAsync();
             if (await reader.ReadAsync())
-                user = new User
-                {
-                    SteamId = reader.GetString("steam"),
-                    Name = reader.GetString("name"),
-                    Value = reader.GetInt32("value"),
-                    Rank = reader.GetInt32("rank"),
-                    Kills = reader.GetInt32("kills"),
-                    Deaths = reader.GetInt32("deaths"),
-                    Shoots = reader.GetInt32("shoots"),
-                    Hits = reader.GetInt32("hits"),
-                    Headshots = reader.GetInt32("headshots"),
-                    Assists = reader.GetInt32("assists"),
-                    RoundWin = reader.GetInt32("round_win"),
-                    RoundLose = reader.GetInt32("round_lose"),
-                    Playtime = reader.GetInt32("playtime"),
-                    LastConnect = reader.GetInt32("lastconnect")
-                };
+                user = ReadUser(reader);
         }
         catch (Exception ex)
         {
@@ -339,16 +352,19 @@ public class Database
             using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var countQuery = $"SELECT COUNT(*) FROM `{_tableName}`";
+            var countQuery = $"SELECT COUNT(*) FROM `{_tableName}` WHERE `server_id` = @serverId";
             using var countCommand = new MySqlCommand(countQuery, connection);
+            countCommand.Parameters.AddWithValue("@serverId", _serverId);
             totalPlayers = Convert.ToInt32(await countCommand.ExecuteScalarAsync());
 
             var rankQuery = $@"
                 SELECT COUNT(*) + 1
                 FROM `{_tableName}`
-                WHERE value > (SELECT value FROM `{_tableName}` WHERE steam = @SteamId)";
+                WHERE `server_id` = @serverId
+                  AND value > (SELECT value FROM `{_tableName}` WHERE steam = @SteamId AND server_id = @serverId)";
             using var rankCommand = new MySqlCommand(rankQuery, connection);
             rankCommand.Parameters.AddWithValue("@SteamId", steamId);
+            rankCommand.Parameters.AddWithValue("@serverId", _serverId);
 
             playerRank = Convert.ToInt32(await rankCommand.ExecuteScalarAsync());
         }
@@ -367,29 +383,14 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        var commandText = $"SELECT * FROM `{_tableName}` ORDER BY `value` DESC LIMIT @topN";
+        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId ORDER BY `value` DESC LIMIT @topN";
         await using var command = new MySqlCommand(commandText, connection);
+        command.Parameters.AddWithValue("@serverId", _serverId);
         command.Parameters.AddWithValue("@topN", topN);
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
-            users.Add(new User
-            {
-                SteamId = reader.GetString("steam"),
-                Name = reader.GetString("name"),
-                Value = reader.GetInt32("value"),
-                Rank = reader.GetInt32("rank"),
-                Kills = reader.GetInt32("kills"),
-                Deaths = reader.GetInt32("deaths"),
-                Shoots = reader.GetInt32("shoots"),
-                Hits = reader.GetInt32("hits"),
-                Headshots = reader.GetInt32("headshots"),
-                Assists = reader.GetInt32("assists"),
-                RoundWin = reader.GetInt32("round_win"),
-                RoundLose = reader.GetInt32("round_lose"),
-                Playtime = reader.GetInt32("playtime"),
-                LastConnect = reader.GetInt32("lastconnect")
-            });
+            users.Add(ReadUser(reader));
 
         return users;
     }
@@ -401,31 +402,38 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        var commandText = $"SELECT * FROM `{_tableName}` ORDER BY `playtime` DESC LIMIT @topN";
+        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId ORDER BY `playtime` DESC LIMIT @topN";
         await using var command = new MySqlCommand(commandText, connection);
+        command.Parameters.AddWithValue("@serverId", _serverId);
         command.Parameters.AddWithValue("@topN", topN);
 
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
-            users.Add(new User
-            {
-                SteamId = reader.GetString("steam"),
-                Name = reader.GetString("name"),
-                Value = reader.GetInt32("value"),
-                Rank = reader.GetInt32("rank"),
-                Kills = reader.GetInt32("kills"),
-                Deaths = reader.GetInt32("deaths"),
-                Shoots = reader.GetInt32("shoots"),
-                Hits = reader.GetInt32("hits"),
-                Headshots = reader.GetInt32("headshots"),
-                Assists = reader.GetInt32("assists"),
-                RoundWin = reader.GetInt32("round_win"),
-                RoundLose = reader.GetInt32("round_lose"),
-                Playtime = reader.GetInt32("playtime"),
-                LastConnect = reader.GetInt32("lastconnect")
-            });
+            users.Add(ReadUser(reader));
 
         return users;
+    }
+
+    private static User ReadUser(MySqlDataReader reader)
+    {
+        return new User
+        {
+            SteamId = reader.GetString("steam"),
+            ServerId = reader.GetString("server_id"),
+            Name = reader.GetString("name"),
+            Value = reader.GetInt32("value"),
+            Rank = reader.GetInt32("rank"),
+            Kills = reader.GetInt32("kills"),
+            Deaths = reader.GetInt32("deaths"),
+            Shoots = reader.GetInt32("shoots"),
+            Hits = reader.GetInt32("hits"),
+            Headshots = reader.GetInt32("headshots"),
+            Assists = reader.GetInt32("assists"),
+            RoundWin = reader.GetInt32("round_win"),
+            RoundLose = reader.GetInt32("round_lose"),
+            Playtime = reader.GetInt32("playtime"),
+            LastConnect = reader.GetInt32("lastconnect")
+        };
     }
 
     public static string? BuildConnectionString(DatabaseConnection connection)

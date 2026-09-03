@@ -3,7 +3,14 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- В этой папке лежат исходники ДВУХ проектов - собираем только свой файл -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="FakeRanksApi.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Зависимости -->

@@ -146,14 +146,15 @@ namespace LevelsRanksExStatsWeapons
 
                     var query = $@"
                         INSERT INTO `{tableName}` 
-                        (`steam`, `classname`, `kills`) 
-                        VALUES (@SteamID, @WeaponClass, 1)
+                        (`steam`, `server_id`, `classname`, `kills`) 
+                        VALUES (@SteamID, @ServerID, @WeaponClass, 1)
                         ON DUPLICATE KEY UPDATE 
                             `kills` = `kills` + 1;";
 
                     var parameters = new
                     {
                         SteamID = steamId,
+                        ServerID = _levelsRanksApi!.ServerId,
                         WeaponClass = weaponClass
                     };
                     await connection.ExecuteAsync(query, parameters);
@@ -270,9 +271,10 @@ namespace LevelsRanksExStatsWeapons
                 CREATE TABLE IF NOT EXISTS `{tableName}` 
                 (
                     `steam` varchar(32) NOT NULL, 
+                    `server_id` varchar(64) NOT NULL DEFAULT 'default', 
                     `classname` varchar(64) NOT NULL, 
                     `kills` int NOT NULL DEFAULT 0,
-                    PRIMARY KEY (`steam`, `classname`)
+                    PRIMARY KEY (`steam`, `server_id`, `classname`)
                 ) CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
             try
@@ -280,6 +282,21 @@ namespace LevelsRanksExStatsWeapons
                 using var connection = new MySqlConnection(connectionString);
                 connection.Open();
                 connection.Execute(createTableQuery);
+
+                // Мягкая миграция для существующих установок (PK был `steam`+`classname`).
+                var hasServerId = connection.ExecuteScalar<long>(
+                    @"SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = @tableName AND COLUMN_NAME = 'server_id';",
+                    new { tableName });
+
+                if (hasServerId == 0)
+                {
+                    connection.Execute($@"
+                        ALTER TABLE `{tableName}`
+                        ADD COLUMN `server_id` varchar(64) NOT NULL DEFAULT 'default' AFTER `steam`,
+                        DROP PRIMARY KEY,
+                        ADD PRIMARY KEY (`steam`, `server_id`, `classname`);");
+                }
             }
             catch (Exception ex)
             {

@@ -7,17 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-	<PackageReference Include="CounterStrikeSharp.API" Version="*" />
-    <Reference Include="VipCoreApi">
-      <HintPath>..\..\VipCoreApi.dll</HintPath>
-    </Reference>
-    <Reference Include="FakeRanksApi">
-      <HintPath>..\..\FakeRanksApi.dll</HintPath>
-    </Reference>		
-  </ItemGroup>
-
-  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="*" />
     <PackageReference Include="Microsoft.Extensions.Localization" Version="8.0.0" />
-  </ItemGroup>
 
+    <!-- Собственный интерфейс IPlayerRankApi модуля FakeRank - разделяемый контракт,
+         резолвится через addons/counterstrikesharp/shared/FakeRanksApi/, поэтому
+         Private=false (копия в папку этого плагина не нужна и вредна). -->
+    <ProjectReference Include="..\CS2-LR-FakeRank\FakeRanksApi.csproj" Private="false" ExcludeAssets="runtime" />
+
+    <!-- Внешняя зависимость (плагин VIP-CS2), собрать из исходников не можем -
+         положите VipCoreApi.dll в /libs в корне репозитория перед сборкой -->
+    <Reference Include="VipCoreApi">
+      <HintPath>..\..\libs\VipCoreApi.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
 </Project>

@@ -33,6 +33,7 @@ public class LevelsRanks : BasePlugin
     public bool ExperienceFromBots { get; set; }
     private string StatisticType { get; set; } = "0";
     public string? TableName { get; set; } = "lvl_base";
+    public string ServerId { get; set; } = "default";
     public int MinPlayersCount { get; set; } = 4;
     private bool ShowSpawnMessage { get; set; } = true;
     public int ShowUsualMessage { get; set; } = 1;
@@ -96,7 +97,7 @@ public class LevelsRanks : BasePlugin
 
         var databaseLogger = LoggerFactory.CreateLogger<Database>();
 
-        Database = new Database(this, DbConnectionString, TableName, databaseLogger);
+        Database = new Database(this, DbConnectionString, TableName, ServerId, databaseLogger);
 
         var levelsRanksApiLogger = LoggerFactory.CreateLogger<LevelsRanksApi>();
         _rankapi = new LevelsRanksApi(this, levelsRanksApiLogger);
@@ -151,6 +152,7 @@ public class LevelsRanks : BasePlugin
         {
             var mainSettings = ConfigLoader<MainSettings>.Load(mainSettingsFilePath);
             TableName = mainSettings.lr_table;
+            ServerId = string.IsNullOrWhiteSpace(mainSettings.lr_server_id) ? "default" : mainSettings.lr_server_id;
             StatisticType = mainSettings.lr_type_statistics;
             ExperienceFromBots = mainSettings.lr_experience_from_bots == "1";
             MinPlayersCount = int.TryParse(mainSettings.lr_minplayers_count, out var minPlayers) ? minPlayers : 4;
@@ -183,6 +185,7 @@ public class LevelsRanks : BasePlugin
                 JsonSerializer.Serialize(defaultSettings, new JsonSerializerOptions { WriteIndented = true }));
             StatisticType = defaultSettings.lr_type_statistics;
             TableName = defaultSettings.lr_table;
+            ServerId = defaultSettings.lr_server_id;
             ExperienceFromBots = defaultSettings.lr_experience_from_bots == "1";
             MinPlayersCount = 4;
             ShowSpawnMessage = true;
@@ -419,6 +422,7 @@ public class LevelsRanks : BasePlugin
                     userFromDb = new User
                     {
                         SteamId = steamIdStr,
+                        ServerId = ServerId,
                         Name = playerName,
                         LastConnect = (int)currentTime,
                         Value = StatisticType == "1" || StatisticType == "2" ? 1000 : 0,
@@ -567,6 +571,7 @@ public class LevelsRanks : BasePlugin
                     userFromDb = new User
                     {
                         SteamId = steamIdStr,
+                        ServerId = ServerId,
                         Name = playerName,
                         LastConnect = (int)currentTime,
                         Value = StatisticType == "1" || StatisticType == "2" ? 1000 : 0

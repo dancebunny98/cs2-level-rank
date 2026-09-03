@@ -37,6 +37,16 @@ namespace LevelsRanksModuleFakeRank
         private readonly ConcurrentDictionary<string, bool>
             _isCustomRankActive = new();
 
+        // Отслеживание игроков, которые ещё не появились в OnlineUsers (обычно это
+        // нормальная короткая гонка сразу после коннекта, пока Core асинхронно
+        // подгружает пользователя из БД). Раньше это логировалось каждую секунду для
+        // каждого такого игрока, что засоряло логи. Теперь: тихо ждём grace-период,
+        // и если игрок так и не появился - предупреждаем один раз, а не каждый тик.
+        private readonly ConcurrentDictionary<string, DateTime> _missingFirstSeen = new();
+        private readonly ConcurrentDictionary<string, DateTime> _missingLastWarned = new();
+        private static readonly TimeSpan MissingGracePeriod = TimeSpan.FromSeconds(10);
+        private static readonly TimeSpan MissingWarnCooldown = TimeSpan.FromSeconds(60);
+
         private const float UpdateInterval = 1.0f;
 
         public override void Load(bool hotReload)
@@ -56,11 +66,26 @@ namespace LevelsRanksModuleFakeRank
                 return;
             }
 
+            PlayerRankApi.ServerId = _api.ServerId;
+
             CreateRanksConfig();
             _ranksConfig = LoadRanksConfig();
 
             RegisterListener<Listeners.OnTick>(OnTick);
             AddTimer(UpdateInterval, async () => { await FetchPlayerRanks(); }, TimerFlags.REPEAT);
+
+            RegisterEventHandler<EventPlayerDisconnect>((@event, info) =>
+            {
+                var player = @event.Userid;
+                if (player?.AuthorizedSteamID != null)
+                {
+                    var steamId = _api!.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
+                    _missingFirstSeen.TryRemove(steamId, out _);
+                    _missingLastWarned.TryRemove(steamId, out _);
+                }
+
+                return HookResult.Continue;
+            });
         }
 
         private async Task FetchPlayerRanks()
@@ -102,9 +127,37 @@ namespace LevelsRanksModuleFakeRank
                 }
                 else
                 {
-                    Logger.LogWarning($"Player {steamId} is not online. Skipping rank update.");
+                    HandleMissingOnlineUser(steamId);
+                    continue;
                 }
+
+                // Игрок найден в OnlineUsers - сбрасываем накопленное состояние "отсутствия".
+                _missingFirstSeen.TryRemove(steamId, out _);
+                _missingLastWarned.TryRemove(steamId, out _);
             }
+        }
+
+        // Игрок из Utilities.GetPlayers() ещё не появился в ILevelsRanksApi.OnlineUsers.
+        // В подавляющем большинстве случаев это нормальная гонка на подключении
+        // (Core ещё выполняет асинхронный запрос к БД) и разрешается за 1-2 тика.
+        // Логируем не каждую секунду, а один раз после grace-периода, и дальше не
+        // чаще, чем раз в MissingWarnCooldown, пока проблема не решится.
+        private void HandleMissingOnlineUser(string steamId)
+        {
+            var now = DateTime.UtcNow;
+            var firstSeen = _missingFirstSeen.GetOrAdd(steamId, now);
+
+            if (now - firstSeen < MissingGracePeriod)
+                return;
+
+            if (_missingLastWarned.TryGetValue(steamId, out var lastWarned) &&
+                now - lastWarned < MissingWarnCooldown)
+                return;
+
+            _missingLastWarned[steamId] = now;
+            Logger.LogWarning(
+                $"Player {steamId} has been missing from LevelsRanks.OnlineUsers for over {MissingGracePeriod.TotalSeconds:0}s. " +
+                "This usually means Core failed to load/authorize this user (check Core logs for DB errors); FakeRank will keep retrying.");
         }
 
         private void OnTick()

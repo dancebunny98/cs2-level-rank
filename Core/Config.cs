@@ -223,6 +223,14 @@ public class RankConfig
 public class MainSettings
 {
     public string? lr_table { get; set; } = "lvl_base";
+
+    /// <summary>
+    /// Идентификатор сервера. Если несколько серверов CS2 используют одну и ту же
+    /// базу/таблицу, задайте каждому серверу своё уникальное значение (например
+    /// "server1", "server2"), чтобы статистика (Core и модули) не смешивалась и
+    /// не требовалось заводить отдельного пользователя под каждый сервер.
+    /// </summary>
+    public string lr_server_id { get; set; } = "default";
     public string lr_type_statistics { get; set; } = "0";
     public string lr_flag_adminmenu { get; set; } = "@lr/admin";
     public string lr_plugin_title { get; set; } = "Levels Ranks v1.1.0";

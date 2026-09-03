@@ -39,6 +39,8 @@ public class LevelsRanksApi : ILevelsRanksApi
 
     public string? DbConnectionString => _levelsRanks.DbConnectionString;
 
+    public string ServerId => _levelsRanks.ServerId;
+
     public void ApplyExperienceUpdateSync(User user, CCSPlayerController player, int expChange, string eventDescription,
         string colorKey)
     {

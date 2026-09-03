@@ -5,16 +5,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
-  
+
   <ItemGroup>
-	<PackageReference Include="CounterStrikeSharp.API" Version="*" />
-	<Reference Include="LevelsRanksApi.dll">
-      <HintPath>..\LevelsRanksApi.dll</HintPath>
-    </Reference>	
-  </ItemGroup>
- 
- <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="*" />
     <PackageReference Include="Dapper" Version="2.1.24" />
     <PackageReference Include="MySqlConnector" Version="2.3.1" />
-  </ItemGroup>  
+
+    <!-- Контракт LevelsRanksApi - разделяемая сборка
+         (addons/counterstrikesharp/shared/LevelsRanksApi/).
+         Private=false: свою копию в папку этого плагина класть не нужно и
+         вредно - иначе у каждого плагина будет своя копия сборки, и
+         PluginCapability<ILevelsRanksApi> будет падать с ошибкой приведения
+         типов между разными AssemblyLoadContext. -->
+    <ProjectReference Include="..\..\Api\LevelsRanksApi.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
 </Project>

@@ -9,6 +9,12 @@ public class PlayerRankApi : IPlayerRankApi
     private static LevelsRanksModuleFakeRank.LevelsRanksModuleFakeRank _core;
     private readonly Dictionary<ulong, (int originalRank, int originalRankType)> _originalRanks = new();
 
+    // Идентификатор сервера (LevelsRanks Core -> settings.json -> lr_server_id).
+    // Кастомные ранги хранятся в файлах на диске (не в БД), поэтому если несколько
+    // серверов делят один и тот же каталог плагина, их нужно различать по подпапке,
+    // иначе ручной ранг, выставленный на одном сервере, "утечёт" на другой.
+    public static string ServerId { get; set; } = "default";
+
     public PlayerRankApi(LevelsRanksModuleFakeRank.LevelsRanksModuleFakeRank core)
     {
         _core = core;
@@ -85,7 +91,7 @@ public class PlayerRankApi : IPlayerRankApi
 
     private static string GetPlayerRankFilePath(ulong steamId)
     {
-        var dataDirectory = Path.Combine(_core.ModuleDirectory, "PlayerData");
+        var dataDirectory = Path.Combine(_core.ModuleDirectory, "PlayerData", ServerId);
         if (!Directory.Exists(dataDirectory))
         {
             Directory.CreateDirectory(dataDirectory);

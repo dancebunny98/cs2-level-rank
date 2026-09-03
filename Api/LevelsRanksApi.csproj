@@ -1,12 +1,17 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
 
-  <ItemGroup>
-    <!-- Зависимости -->
-    <PackageReference Include="CounterStrikeSharp.API" Version="*" />
-  </ItemGroup>
+        <!-- Это разделяемый контракт (interface + модель), а не реализация:
+             деплоится в addons/counterstrikesharp/shared/LevelsRanksApi/,
+             поэтому его имя и должно остаться LevelsRanksApi.dll. -->
+        <AssemblyName>LevelsRanksApi</AssemblyName>
+        <RootNamespace>LevelsRanksApi</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="CounterStrikeSharp.API" Version="*"/>
+    </ItemGroup>
 </Project>

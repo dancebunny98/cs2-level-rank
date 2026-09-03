@@ -111,8 +111,8 @@ public class LevelsRanksExStatsHits : BasePlugin
 
             var query = $@"
 INSERT INTO `{tableName}` 
-(SteamID, DmgHealth, DmgArmor, {columnName})
-VALUES (@SteamID, @DmgHealth, @DmgArmor, 1)
+(SteamID, ServerID, DmgHealth, DmgArmor, {columnName})
+VALUES (@SteamID, @ServerID, @DmgHealth, @DmgArmor, 1)
 ON DUPLICATE KEY UPDATE 
     DmgHealth = DmgHealth + @DmgHealth, 
     DmgArmor = DmgArmor + @DmgArmor,
@@ -121,6 +121,7 @@ ON DUPLICATE KEY UPDATE
             var parameters = new 
             {
                 SteamID = steamId,
+                ServerID = _levelsRanksApi!.ServerId,
                 DmgHealth = dmgHealth,
                 DmgArmor = dmgArmor
             };
@@ -143,7 +144,8 @@ ON DUPLICATE KEY UPDATE
         var createTableQuery = $@"
             CREATE TABLE IF NOT EXISTS `{tableName}` 
             (
-                `SteamID` varchar(32) NOT NULL PRIMARY KEY DEFAULT '', 
+                `SteamID` varchar(32) NOT NULL DEFAULT '', 
+                `ServerID` varchar(64) NOT NULL DEFAULT 'default', 
                 `DmgHealth` int NOT NULL DEFAULT 0, 
                 `DmgArmor` int NOT NULL DEFAULT 0, 
                 `Head` int NOT NULL DEFAULT 0, 
@@ -153,13 +155,37 @@ ON DUPLICATE KEY UPDATE
                 `RightArm` int NOT NULL DEFAULT 0, 
                 `LeftLeg` int NOT NULL DEFAULT 0, 
                 `RightLeg` int NOT NULL DEFAULT 0, 
-                `Neak` int NOT NULL DEFAULT 0
+                `Neak` int NOT NULL DEFAULT 0,
+                PRIMARY KEY (`SteamID`, `ServerID`)
             ) {tableCharacterSet};";
 
         using (var connection = new MySqlConnection(connectionString))
         {
             connection.Open();
             connection.Execute(createTableQuery);
+
+            // Мягкая миграция для существующих установок (SteamID был единственным PK).
+            try
+            {
+                var hasServerId = connection.ExecuteScalar<long>(
+                    @"SELECT COUNT(*) FROM information_schema.COLUMNS
+                      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = @tableName AND COLUMN_NAME = 'ServerID';",
+                    new { tableName });
+
+                if (hasServerId == 0)
+                {
+                    connection.Execute($@"
+                        ALTER TABLE `{tableName}`
+                        ADD COLUMN `ServerID` varchar(64) NOT NULL DEFAULT 'default' AFTER `SteamID`,
+                        DROP PRIMARY KEY,
+                        ADD PRIMARY KEY (`SteamID`, `ServerID`);");
+                }
+            }
+            catch (Exception)
+            {
+                // Не валим загрузку модуля из-за неудачной автомиграции -
+                // администратор может применить MIGRATION.md вручную.
+            }
         }
     } 
 }
