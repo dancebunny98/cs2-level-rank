@@ -11,6 +11,7 @@ on:
 env:
   DOTNET_VERSION: "8.0.x"
   CONFIGURATION: Release
+  STAGE: dist/addons/counterstrikesharp
 
 jobs:
   build:
@@ -25,17 +26,16 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # LevelsRanksApi (контракт) + LVL Core (реализация) + все не-VIP модули
-      # собираются одним вызовом через .sln.
+      # LevelsRanksApi (контракт) + LVL Core (реализация) + все не-VIP модули.
+      # Собираем решение целиком один раз - если где-то реальная ошибка
+      # компиляции C#, она вся будет видна тут одним списком, а не по частям
+      # в отдельных publish-шагах ниже.
       - name: Restore
         run: dotnet restore "LevelsRanks.sln"
 
       - name: Build Core + modules
         run: dotnet build "LevelsRanks.sln" -c ${{ env.CONFIGURATION }} --no-restore
 
-      # VIP-модули зависят от стороннего VipCoreApi.dll, который не хранится в
-      # репозитории (см. libs/README.md). Собираем их отдельно и не роняем
-      # остальную сборку, если файла нет.
       - name: Check for VipCoreApi.dll
         id: vipcore
         run: |
@@ -46,51 +46,47 @@ jobs:
             echo "::warning::libs/VipCoreApi.dll not found - skipping VIP-модули (CS2-VIP-LR-ExperienceMultiplier, CS2_VIP_LR_CustomFakeRank). See libs/README.md."
           fi
 
-      - name: Build VIP modules
-        if: steps.vipcore.outputs.present == 'true'
-        run: |
-          dotnet build "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }}
-          dotnet build "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }}
-
-      # Раскладываем всё в структуру addons/counterstrikesharp/..., как её ожидает
-      # CounterStrikeSharp. Разделяемые контракты (LevelsRanksApi.dll с
-      # ILevelsRanksApi, FakeRanksApi.dll с IPlayerRankApi) кладём ТОЛЬКО в
-      # shared/<Package>/ и НЕ дублируем в папках плагинов, включая сам Core
-      # (см. Private=false в csproj) - иначе у разных плагинов будут разные
-      # экземпляры одной и той же сборки, и PluginCapability начнёт падать
-      # с ошибкой приведения типов.
-      # https://docs.cssharp.dev/docs/features/shared-plugin-api.html
-      - name: Stage plugin layout
+      # ВАЖНО: каждый проект публикуется в СВОЮ папку через `dotnet publish -o`,
+      # а не копируется через `cp bin/.../*.dll`. Раньше скрипт собирал путь к
+      # bin-папке из имени .csproj (без расширения), а не из реальной папки
+      # проекта - для модулей с квадратными скобками в имени файла
+      # ("[LR] Module - ExStats Hits.csproj" и т.п.) это давало несуществующий
+      # путь, и `cp` падал с "No such file or directory". Плюс у FakeRank два
+      # проекта (FakeRanksApi.csproj и "[LR] Module - FakeRank.csproj") лежат
+      # в одной папке и собираются в один общий bin/ - наивный `cp *.dll`
+      # захватил бы туда и FakeRanksApi.dll, который должен жить только в
+      # shared/ (иначе PluginCapability падает с ошибкой приведения типов
+      # между разными копиями одной и той же сборки).
+      # `dotnet publish` этого избегает: у каждого проекта своя выходная
+      # папка, и Private=false / ExcludeAssets=runtime на ProjectReference
+      # (уже стоит в .csproj) означает, что разделяемые контракты
+      # (LevelsRanksApi.dll, FakeRanksApi.dll) туда не копируются.
+      - name: Publish shared contracts
         run: |
           set -e
-          STAGE="dist/addons/counterstrikesharp"
-          mkdir -p "$STAGE/plugins/LVL Core" "$STAGE/shared/LevelsRanksApi" "$STAGE/shared/FakeRanksApi"
+          dotnet publish "Api/LevelsRanksApi.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/shared/LevelsRanksApi"
+          dotnet publish "modules/CS2-LR-FakeRank/FakeRanksApi.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/shared/FakeRanksApi"
 
-          cp -v Core/bin/${{ env.CONFIGURATION }}/net8.0/*.dll "$STAGE/plugins/LVL Core/"
-          cp -v "Api/bin/${{ env.CONFIGURATION }}/net8.0/LevelsRanksApi.dll" "$STAGE/shared/LevelsRanksApi/"
-          cp -v "modules/CS2-LR-FakeRank/bin/${{ env.CONFIGURATION }}/net8.0/FakeRanksApi.dll" "$STAGE/shared/FakeRanksApi/"
+      - name: Publish Core
+        run: dotnet publish "Core/LVL Core.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LVL Core"
 
-          declare -A modules=(
-            ["modules/CS2-LR-FakeRank/[LR] Module - FakeRank"]="LR Module - FakeRank"
-            ["modules/CS2-LR-ExStats-Hits/[LR] Module - ExStats Hits"]="LR Module - ExStats Hits"
-            ["modules/CS2-LR-ExStats-Weapons/[LR] Module - ExStats Weapons"]="LR Module - ExStats Weapons"
-            ["modules/CS2-LR-Module-Tag/[LR] Module - Tag"]="LR Module - Tag"
-          )
+      - name: Publish modules
+        run: |
+          set -e
+          dotnet publish "modules/CS2-LR-FakeRank/[LR] Module - FakeRank.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR Module - FakeRank"
+          dotnet publish "modules/CS2-LR-ExStats-Hits/[LR] Module - ExStats Hits.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR Module - ExStats Hits"
+          dotnet publish "modules/CS2-LR-ExStats-Weapons/[LR] Module - ExStats Weapons.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR Module - ExStats Weapons"
+          dotnet publish "modules/CS2-LR-Module-Tag/[LR] Module - Tag.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR Module - Tag"
 
-          for src in "${!modules[@]}"; do
-            name="${modules[$src]}"
-            out="$STAGE/plugins/$name"
-            mkdir -p "$out"
-            # Private=false в csproj уже исключил LevelsRanksApi.dll/FakeRanksApi.dll
-            # из выходной папки модуля - здесь просто копируем то, что осталось.
-            cp -v "$src/bin/${{ env.CONFIGURATION }}/net8.0/"*.dll "$out/"
-          done
-
-          if [ "${{ steps.vipcore.outputs.present }}" == "true" ]; then
-            mkdir -p "$STAGE/plugins/VIP LR ExperienceMultiplier" "$STAGE/plugins/VIP CustomFakeRank"
-            cp -v "modules/CS2-VIP-LR-ExperienceMultiplier/bin/${{ env.CONFIGURATION }}/net8.0/"*.dll "$STAGE/plugins/VIP LR ExperienceMultiplier/"
-            cp -v "modules/CS2_VIP_LR_CustomFakeRank/bin/${{ env.CONFIGURATION }}/net8.0/"*.dll "$STAGE/plugins/VIP CustomFakeRank/"
-          fi
+      # VIP-модули зависят от стороннего VipCoreApi.dll, который не хранится в
+      # репозитории (см. libs/README.md). Публикуем их отдельно и не роняем
+      # остальную сборку, если файла нет.
+      - name: Publish VIP modules
+        if: steps.vipcore.outputs.present == 'true'
+        run: |
+          set -e
+          dotnet publish "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }} -o "$STAGE/plugins/VIP LR ExperienceMultiplier"
+          dotnet publish "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }} -o "$STAGE/plugins/VIP CustomFakeRank"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
