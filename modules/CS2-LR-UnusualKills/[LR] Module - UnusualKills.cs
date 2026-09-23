@@ -174,6 +174,10 @@ public class LevelsRanksUnusualKills : BasePlugin
 
         // Exp_Mode = "1" (по умолчанию, как в оригинале): каждый тип - отдельное сообщение и начисление.
         // Exp_Mode = "0": все бонусы суммируются в одно начисление с одним сообщением (меньше спама в чат).
+        // Важно: последний параметр ApplyExperienceUpdateSync - это НЕ цвет напрямую, а ключ
+        // локализации в самом Core (внутри дергается Core.Localizer[colorKey] + замена {ChatColors.X}
+        // плейсхолдеров). У этого модуля свой Localizer с другими ключами (type.*, message.*),
+        // поэтому тут переиспользуем существующий в Core ключ "killstreak_bonus_color".
         if (_config.ExpMode == "1")
         {
             foreach (var type in triggeredTypes)
@@ -183,7 +187,7 @@ public class LevelsRanksUnusualKills : BasePlugin
 
                 var sign = exp > 0 ? "+" : "";
                 var message = Localizer["message.single", Localizer[$"type.{type}"], sign, exp];
-                _levelsRanksApi.ApplyExperienceUpdateSync(attackerUser, attacker, exp, message, "green");
+                _levelsRanksApi.ApplyExperienceUpdateSync(attackerUser, attacker, exp, message, "killstreak_bonus_color");
             }
         }
         else
@@ -196,7 +200,7 @@ public class LevelsRanksUnusualKills : BasePlugin
                 .Select(t => Localizer[$"type.{t}"]));
             var sign = total > 0 ? "+" : "";
             var message = Localizer["message.combined", namesJoined, sign, total];
-            _levelsRanksApi.ApplyExperienceUpdateSync(attackerUser, attacker, total, message, "green");
+            _levelsRanksApi.ApplyExperienceUpdateSync(attackerUser, attacker, total, message, "killstreak_bonus_color");
         }
     }
 

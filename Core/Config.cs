@@ -182,7 +182,6 @@ public static class RanksSettings
     public static Dictionary<int, RankConfig> Ranks { get; private set; } = new();
 
     public static void Load(string settingsFilePath)
-    public static void Load(string settingsFilePath)
     {
         Ranks = ConfigLoader<Dictionary<int, RankConfig>>.Load(settingsFilePath, CreateDefaultRanks);
     }
