@@ -1,0 +1,14 @@
+{
+  "prefix": "Unusual Kills",
+  "type.OpenFrag": "First blood",
+  "type.Penetrated": "Wallbang kill",
+  "type.NoScope": "No-scope kill",
+  "type.Run": "Kill while running",
+  "type.Jump": "Kill while jumping",
+  "type.Flash": "Blind kill",
+  "type.Smoke": "Kill through smoke",
+  "type.LastClip": "Kill with last bullet in clip",
+  "type.Distance": "Long-range kill",
+  "message.single": "{0}: {1}{2} exp",
+  "message.combined": "{0}: {1}{2} exp"
+}
