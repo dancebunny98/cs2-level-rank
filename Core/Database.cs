@@ -383,7 +383,7 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId ORDER BY `value` DESC LIMIT @topN";
+        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId AND `lastconnect` > 0 ORDER BY `value` DESC LIMIT @topN";
         await using var command = new MySqlCommand(commandText, connection);
         command.Parameters.AddWithValue("@serverId", _serverId);
         command.Parameters.AddWithValue("@topN", topN);
@@ -402,7 +402,7 @@ public class Database
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId ORDER BY `playtime` DESC LIMIT @topN";
+        var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId AND `lastconnect` > 0 ORDER BY `playtime` DESC LIMIT @topN";
         await using var command = new MySqlCommand(commandText, connection);
         command.Parameters.AddWithValue("@serverId", _serverId);
         command.Parameters.AddWithValue("@topN", topN);
@@ -412,6 +412,41 @@ public class Database
             users.Add(ReadUser(reader));
 
         return users;
+    }
+
+    // Аналог lr_cleandb_days из оригинального плагина: игроков, которые не заходили
+    // дольше `days` дней, не удаляем, а обнуляем lastconnect - тогда они перестают
+    // попадать в топы (см. фильтр `lastconnect` > 0 выше), но статистика сохраняется
+    // и восстанавливается автоматически при следующем заходе игрока.
+    public async Task<int> CleanupInactiveUsersAsync(int days)
+    {
+        if (days <= 0) return 0;
+
+        try
+        {
+            await using var connection = new MySqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (long)days * 86400;
+
+            var commandText =
+                $"UPDATE `{_tableName}` SET `lastconnect` = 0 WHERE `server_id` = @serverId AND `lastconnect` > 0 AND `lastconnect` < @cutoff";
+            await using var command = new MySqlCommand(commandText, connection);
+            command.Parameters.AddWithValue("@serverId", _serverId);
+            command.Parameters.AddWithValue("@cutoff", cutoff);
+
+            var affected = await command.ExecuteNonQueryAsync();
+            if (affected > 0)
+                _logger.LogInformation(
+                    $"CleanDB: hidden {affected} inactive player(s) from top/stats (inactive > {days} days).");
+
+            return affected;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"CleanDB failed: {ex}");
+            return 0;
+        }
     }
 
     private static User ReadUser(MySqlDataReader reader)

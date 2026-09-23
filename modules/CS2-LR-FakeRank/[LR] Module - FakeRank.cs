@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
@@ -26,11 +27,18 @@ namespace LevelsRanksModuleFakeRank
 
         private Dictionary<int, (int competitiveRanking, int competitiveRankType)>? _ranksConfig;
         private readonly Dictionary<string, (int competitiveRanking, int competitiveRankType)> _playerRanks = new();
+
+        // Type "3" из оригинального плагина (Pisex): вместо таблицы FakeRank ранг
+        // показывается как сырое значение опыта игрока (аналог Premier rating).
+        // Type "4": ранг берётся из таблицы FakeRank (как в 0/1/2), но отображается
+        // с competitiveRankType = 11, как и Type "3".
+        private bool _useRawExperienceAsRanking;
+        private int _rankTypeForConfig;
         private ILevelsRanksApi? _api;
         private readonly PluginCapability<ILevelsRanksApi> _apiCapability = new("levels_ranks");
         private IPlayerRankApi? _playerRankApi;
         private readonly PluginCapability<IPlayerRankApi> _playerRankApiCapability = new("PLAYER_RANK_API");
-        private Dictionary<string, int> _lastKnownLevels = new();
+        private readonly Dictionary<string, (int competitiveRanking, int competitiveRankType)> _lastKnownRankInfo = new();
         private ConcurrentDictionary<string, (int competitiveRanking, int competitiveRankType)> _rankCache = new();
         private ConcurrentDictionary<string, DateTime> _cacheTimestamps = new();
 
@@ -109,19 +117,30 @@ namespace LevelsRanksModuleFakeRank
             {
                 if (_api!.OnlineUsers.TryGetValue(steamId, out var onlineUser))
                 {
-                    var currentLevelId = onlineUser.Rank;
+                    (int competitiveRanking, int competitiveRankType) rankInfo;
+                    var haveRankInfo = true;
 
-                    if (!_isCustomRankActive.TryGetValue(steamId, out var isCustomActive) || !isCustomActive)
+                    if (_useRawExperienceAsRanking)
                     {
-                        if (!_lastKnownLevels.TryGetValue(steamId, out var lastLevel) || currentLevelId != lastLevel)
+                        // Type "3": ранг = сырое значение опыта игрока (без таблицы FakeRank).
+                        rankInfo = (onlineUser.Value, _rankTypeForConfig);
+                    }
+                    else if (_ranksConfig == null || !_ranksConfig.TryGetValue(onlineUser.Rank, out rankInfo))
+                    {
+                        haveRankInfo = false;
+                        rankInfo = default;
+                    }
+
+                    if (haveRankInfo &&
+                        (!_isCustomRankActive.TryGetValue(steamId, out var isCustomActive) || !isCustomActive))
+                    {
+                        if (!_lastKnownRankInfo.TryGetValue(steamId, out var lastRankInfo) ||
+                            rankInfo != lastRankInfo)
                         {
-                            if (_ranksConfig != null && _ranksConfig.TryGetValue(currentLevelId, out var rankInfo))
-                            {
-                                _playerRanks[steamId] = rankInfo;
-                                _lastKnownLevels[steamId] = currentLevelId;
-                                _rankCache[steamId] = rankInfo;
-                                _cacheTimestamps[steamId] = DateTime.UtcNow;
-                            }
+                            _playerRanks[steamId] = rankInfo;
+                            _lastKnownRankInfo[steamId] = rankInfo;
+                            _rankCache[steamId] = rankInfo;
+                            _cacheTimestamps[steamId] = DateTime.UtcNow;
                         }
                     }
                 }
@@ -212,6 +231,20 @@ namespace LevelsRanksModuleFakeRank
         {
             var configDirectory = Path.Combine(Application.RootDirectory, "configs/plugins/LevelsRanks");
             var filePath = Path.Combine(configDirectory, "settings_fakerank.json");
+            var options = new JsonSerializerOptions { WriteIndented = true };
+
+            // Дефолтный Type = "0" -> Premier (competitiveRankType 12), где ранг - это НЕ бейдж
+            // 0..18, а непрерывный CS Rating (примерно 0..35000+, цветовые полосы по ~5000).
+            // Поэтому таблица ниже растянута под реальную шкалу Premier, а не 1..18.
+            // Если переключите Type на "1" (Wingman), "2" (Danger Zone) или "4" (Competitive 2.0
+            // через таблицу) - там ранг снова просто бейдж 0..18, и таблицу лучше вернуть к 1..18.
+            var defaultFakeRank = new Dictionary<string, string>
+            {
+                { "1", "0" }, { "2", "500" }, { "3", "1000" }, { "4", "2000" }, { "5", "3500" },
+                { "6", "5000" }, { "7", "7000" }, { "8", "9000" }, { "9", "11000" }, { "10", "13000" },
+                { "11", "15000" }, { "12", "17500" }, { "13", "20000" }, { "14", "22500" }, { "15", "25000" },
+                { "16", "27500" }, { "17", "30000" }, { "18", "33000" }
+            };
 
             if (!File.Exists(filePath))
             {
@@ -219,34 +252,59 @@ namespace LevelsRanksModuleFakeRank
                 {
                     LR_FakeRank = new
                     {
-                        Type = "1",
-                        FakeRank = new Dictionary<string, string>
-                        {
-                            { "1", "1" },
-                            { "2", "2" },
-                            { "3", "3" },
-                            { "4", "4" },
-                            { "5", "5" },
-                            { "6", "6" },
-                            { "7", "7" },
-                            { "8", "8" },
-                            { "9", "9" },
-                            { "10", "10" },
-                            { "11", "11" },
-                            { "12", "12" },
-                            { "13", "13" },
-                            { "14", "14" },
-                            { "15", "15" },
-                            { "16", "16" },
-                            { "17", "17" },
-                            { "18", "18" }
-                        }
+                        // 0 - Premier, 1 - Wingman, 2 - Danger Zone,
+                        // 3 - Competitive 2.0 (ранг = опыт игрока), 4 - Competitive 2.0 (таблица ниже)
+                        Type = "0",
+                        FakeRank = defaultFakeRank
                     }
                 };
 
                 Directory.CreateDirectory(configDirectory);
-                var json = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(filePath, json);
+                File.WriteAllText(filePath, JsonSerializer.Serialize(defaultConfig, options));
+                return;
+            }
+
+            // Файл уже существует (обновление плагина) - дописываем только то, чего в нём
+            // не хватает (например, отсутствующий "Type" или новые уровни в "FakeRank"),
+            // не трогая то, что уже настроено.
+            try
+            {
+                var root = JsonNode.Parse(File.ReadAllText(filePath)) as JsonObject ?? new JsonObject();
+                var changed = false;
+
+                if (root["LR_FakeRank"] is not JsonObject section)
+                {
+                    section = new JsonObject();
+                    root["LR_FakeRank"] = section;
+                    changed = true;
+                }
+
+                if (!section.ContainsKey("Type"))
+                {
+                    section["Type"] = "0";
+                    changed = true;
+                }
+
+                if (section["FakeRank"] is not JsonObject fakeRankSection)
+                {
+                    fakeRankSection = new JsonObject();
+                    section["FakeRank"] = fakeRankSection;
+                    changed = true;
+                }
+
+                foreach (var (level, value) in defaultFakeRank)
+                    if (!fakeRankSection.ContainsKey(level))
+                    {
+                        fakeRankSection[level] = value;
+                        changed = true;
+                    }
+
+                if (changed)
+                    File.WriteAllText(filePath, root.ToJsonString(options));
+            }
+            catch (JsonException)
+            {
+                // Повреждённый JSON - не трогаем файл, чтобы не потерять то, что там есть.
             }
         }
 
@@ -265,31 +323,38 @@ namespace LevelsRanksModuleFakeRank
             {
                 if (fakeRanksObject is JsonElement fakeRanksElement)
                 {
-                    int rankType;
+                    var type = 0;
                     if (fakeRankSection.TryGetValue("Type", out var typeValue) &&
                         typeValue is JsonElement typeElement &&
-                        typeElement.GetString() is string typeString && int.TryParse(typeString, out var type))
+                        typeElement.GetString() is string typeString && int.TryParse(typeString, out var parsedType))
+                        type = parsedType;
+
+                    // Соответствует Type в оригинальном lr_fakerank.cpp (Pisex):
+                    // 0 - Premier (12), таблица FakeRank
+                    // 1 - Wingman (7), таблица FakeRank
+                    // 2 - Danger Zone (10), таблица FakeRank
+                    // 3 - Competitive 2.0 (11), ранг = сырой опыт игрока (без таблицы)
+                    // 4 - Competitive 2.0 (11), таблица FakeRank
+                    int rankType;
+                    switch (type)
                     {
-                        switch (type)
-                        {
-                            case 1:
-                                rankType = 12;
-                                break;
-                            case 2:
-                                rankType = 7;
-                                break;
-                            case 3:
-                                rankType = 11;
-                                break;
-                            default:
-                                rankType = 12;
-                                break;
-                        }
+                        case 1:
+                            rankType = 7;
+                            break;
+                        case 2:
+                            rankType = 10;
+                            break;
+                        case 3:
+                        case 4:
+                            rankType = 11;
+                            break;
+                        default:
+                            rankType = 12;
+                            break;
                     }
-                    else
-                    {
-                        rankType = 12;
-                    }
+
+                    _useRawExperienceAsRanking = type == 3;
+                    _rankTypeForConfig = rankType;
 
                     foreach (var rank in fakeRanksElement.EnumerateObject())
                     {

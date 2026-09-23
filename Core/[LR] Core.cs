@@ -49,6 +49,10 @@ public class LevelsRanks : BasePlugin
     public bool ShowRankList { get; set; }
     public string AdminMenuFlag { get; private set; } = "@lr/admin";
     public string PluginTitle { get; set; } = "Levels Ranks v1.1.0";
+    public int TopCount { get; set; } = 10;
+    public int StartPoints { get; set; }
+    public int CleanDbDays { get; set; } = 30;
+    public bool SaveDataPlayerModeLive { get; set; } = true;
     public ConcurrentDictionary<string, User> OnlineUsers { get; set; } = new();
     private readonly ConcurrentDictionary<string, int> _killStreaks = new();
 
@@ -106,8 +110,20 @@ public class LevelsRanks : BasePlugin
         Task.Run(() => Database.CreateTable());
 
 
-        AddTimer(5.0f, async () => await ProcessUserUpdateQueue(), TimerFlags.REPEAT);
+        // lr_db_savedataplayer_mode = "1" (по умолчанию): батчим сохранение каждые 5 секунд,
+        // плюс сохраняем при смене ранга/выходе/конце карты - актуальные данные.
+        // lr_db_savedataplayer_mode = "0": не флашим очередь по таймеру, копим изменения в
+        // памяти и сохраняем только при выходе игрока/смене карты - меньше нагрузка на БД.
+        if (SaveDataPlayerModeLive)
+            AddTimer(5.0f, async () => await ProcessUserUpdateQueue(), TimerFlags.REPEAT);
         AddTimer(60.0f, async () => await UpdateOnlineUserPlaytime(), TimerFlags.REPEAT);
+
+        if (CleanDbDays > 0)
+        {
+            AddTimer(10.0f, async () => await Database.CleanupInactiveUsersAsync(CleanDbDays));
+            AddTimer(24 * 60 * 60f, async () => await Database.CleanupInactiveUsersAsync(CleanDbDays),
+                TimerFlags.REPEAT);
+        }
 
         Task.Run(ReauthorizeOnlinePlayers);
 
@@ -148,61 +164,39 @@ public class LevelsRanks : BasePlugin
 
         RanksSettings.Load(ranksFilePath);
 
-        if (File.Exists(mainSettingsFilePath))
-        {
-            var mainSettings = ConfigLoader<MainSettings>.Load(mainSettingsFilePath);
-            TableName = mainSettings.lr_table;
-            ServerId = string.IsNullOrWhiteSpace(mainSettings.lr_server_id) ? "default" : mainSettings.lr_server_id;
-            StatisticType = mainSettings.lr_type_statistics;
-            ExperienceFromBots = mainSettings.lr_experience_from_bots == "1";
-            MinPlayersCount = int.TryParse(mainSettings.lr_minplayers_count, out var minPlayers) ? minPlayers : 4;
-            ShowSpawnMessage = mainSettings.lr_show_spawnmessage == "1";
-            ShowUsualMessage = int.TryParse(mainSettings.lr_show_usualmessage, out var showUsualMessage)
-                ? showUsualMessage
-                : 1;
-            BlockExpDuringWarmup = mainSettings.lr_block_warmup == "1";
-            GiveExpOnRoundEnd = mainSettings.lr_giveexp_roundend == "1";
-            AllAgainstAll = mainSettings.lr_allagainst_all == "1";
-            ShowLevelUpMessage = mainSettings.lr_show_levelup_message == "1";
-            ShowLevelDownMessage = mainSettings.lr_show_leveldown_message == "1";
-            PlaySound = mainSettings.lr_sound == "1";
-            SoundLvlUp = mainSettings.lr_sound_lvlup;
-            SoundLvlDown = mainSettings.lr_sound_lvldown;
-            _showResetMyStats = mainSettings.lr_show_resetmystats == "1";
-            _resetMyStatsCooldown = long.TryParse(mainSettings.lr_resetmystats_cooldown, out var cooldown)
-                ? cooldown
-                : 86400;
-            ShowRankMessage = mainSettings.lr_show_rankmessage == "1";
-            ShowRankList = mainSettings.lr_show_ranklist == "1";
-            PluginTitle = mainSettings.lr_plugin_title;
-            AdminMenuFlag = mainSettings.lr_flag_adminmenu;
-        }
-        else
-        {
-            var defaultSettings = new MainSettings();
-            Directory.CreateDirectory(configDirectory);
-            File.WriteAllText(mainSettingsFilePath,
-                JsonSerializer.Serialize(defaultSettings, new JsonSerializerOptions { WriteIndented = true }));
-            StatisticType = defaultSettings.lr_type_statistics;
-            TableName = defaultSettings.lr_table;
-            ServerId = defaultSettings.lr_server_id;
-            ExperienceFromBots = defaultSettings.lr_experience_from_bots == "1";
-            MinPlayersCount = 4;
-            ShowSpawnMessage = true;
-            ShowUsualMessage = 1;
-            AllAgainstAll = defaultSettings.lr_allagainst_all == "1";
-            ShowLevelUpMessage = defaultSettings.lr_show_levelup_message == "1";
-            ShowLevelDownMessage = defaultSettings.lr_show_leveldown_message == "1";
-            PlaySound = true;
-            SoundLvlUp = defaultSettings.lr_sound_lvlup;
-            SoundLvlDown = defaultSettings.lr_sound_lvldown;
-            _showResetMyStats = defaultSettings.lr_show_resetmystats == "1";
-            _resetMyStatsCooldown = 86400;
-            ShowRankMessage = defaultSettings.lr_show_rankmessage == "1";
-            ShowRankList = defaultSettings.lr_show_ranklist == "1";
-            PluginTitle = defaultSettings.lr_plugin_title;
-            AdminMenuFlag = defaultSettings.lr_flag_adminmenu;
-        }
+        // ConfigLoader сам создаст settings.json с дефолтами, если файла ещё нет,
+        // и сам допишет в уже существующий файл недостающие ключи (например, после
+        // обновления плагина), не трогая то, что уже настроено на сервере.
+        var mainSettings = ConfigLoader<MainSettings>.Load(mainSettingsFilePath);
+        TableName = mainSettings.lr_table;
+        ServerId = string.IsNullOrWhiteSpace(mainSettings.lr_server_id) ? "default" : mainSettings.lr_server_id;
+        StatisticType = mainSettings.lr_type_statistics;
+        ExperienceFromBots = mainSettings.lr_experience_from_bots == "1";
+        MinPlayersCount = int.TryParse(mainSettings.lr_minplayers_count, out var minPlayers) ? minPlayers : 4;
+        ShowSpawnMessage = mainSettings.lr_show_spawnmessage == "1";
+        ShowUsualMessage = int.TryParse(mainSettings.lr_show_usualmessage, out var showUsualMessage)
+            ? showUsualMessage
+            : 1;
+        BlockExpDuringWarmup = mainSettings.lr_block_warmup == "1";
+        GiveExpOnRoundEnd = mainSettings.lr_giveexp_roundend == "1";
+        AllAgainstAll = mainSettings.lr_allagainst_all == "1";
+        ShowLevelUpMessage = mainSettings.lr_show_levelup_message == "1";
+        ShowLevelDownMessage = mainSettings.lr_show_leveldown_message == "1";
+        PlaySound = mainSettings.lr_sound == "1";
+        SoundLvlUp = mainSettings.lr_sound_lvlup;
+        SoundLvlDown = mainSettings.lr_sound_lvldown;
+        _showResetMyStats = mainSettings.lr_show_resetmystats == "1";
+        _resetMyStatsCooldown = long.TryParse(mainSettings.lr_resetmystats_cooldown, out var cooldown)
+            ? cooldown
+            : 86400;
+        ShowRankMessage = mainSettings.lr_show_rankmessage == "1";
+        ShowRankList = mainSettings.lr_show_ranklist == "1";
+        PluginTitle = mainSettings.lr_plugin_title;
+        AdminMenuFlag = mainSettings.lr_flag_adminmenu;
+        TopCount = int.TryParse(mainSettings.lr_top_count, out var topCount) ? topCount : 10;
+        StartPoints = int.TryParse(mainSettings.lr_start_points, out var startPoints) ? startPoints : 0;
+        CleanDbDays = int.TryParse(mainSettings.lr_cleandb_days, out var cleanDbDays) ? cleanDbDays : 30;
+        SaveDataPlayerModeLive = mainSettings.lr_db_savedataplayer_mode != "0";
 
         if (DatabaseConnection == null) throw new NullReferenceException("Database connection configuration is null.");
     }
@@ -243,7 +237,11 @@ public class LevelsRanks : BasePlugin
             _userUpdateQueue.Enqueue(user);
         }
 
-        await ProcessUserUpdateQueue();
+        // В режиме "только при выходе" (lr_db_savedataplayer_mode = "0") не форсируем запись в БД
+        // каждую минуту - изменения (playtime и т.д.) остаются в том же объекте User в OnlineUsers
+        // и будут сохранены при отключении игрока/смене карты.
+        if (SaveDataPlayerModeLive)
+            await ProcessUserUpdateQueue();
     }
 
 
@@ -425,7 +423,7 @@ public class LevelsRanks : BasePlugin
                         ServerId = ServerId,
                         Name = playerName,
                         LastConnect = (int)currentTime,
-                        Value = StatisticType == "1" || StatisticType == "2" ? 1000 : 0,
+                        Value = StatisticType == "1" || StatisticType == "2" ? 1000 : StartPoints,
                         Rank = 1
                     };
                     await Database.AddUserToDb(userFromDb);
@@ -574,7 +572,7 @@ public class LevelsRanks : BasePlugin
                         ServerId = ServerId,
                         Name = playerName,
                         LastConnect = (int)currentTime,
-                        Value = StatisticType == "1" || StatisticType == "2" ? 1000 : 0
+                        Value = StatisticType == "1" || StatisticType == "2" ? 1000 : StartPoints
                     };
                     await Database.AddUserToDb(userFromDb);
                 }
@@ -1209,7 +1207,7 @@ public class LevelsRanks : BasePlugin
 
     private async void ShowTopPlayersByExperience(CCSPlayerController player)
     {
-        var topPlayers = await Database.GetTopPlayersByExperience(10);
+        var topPlayers = await Database.GetTopPlayersByExperience(TopCount);
         var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["top_10_experience"]));
 
         for (var i = 0; i < topPlayers.Count; i++)
@@ -1239,7 +1237,7 @@ public class LevelsRanks : BasePlugin
 
     private async void ShowTopPlayersByPlaytime(CCSPlayerController player)
     {
-        var topPlayers = await Database.GetTopPlayersByPlaytime(10);
+        var topPlayers = await Database.GetTopPlayersByPlaytime(TopCount);
         var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["top_10_activity"]));
 
         for (var i = 0; i < topPlayers.Count; i++)

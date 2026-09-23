@@ -1,27 +1,70 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
 namespace LevelsRanks;
 
 public class ConfigLoader<T> where T : new()
 {
-    public static T Load(string path)
-    {
-        var options = new JsonSerializerOptions
-        {
-            WriteIndented = true
-        };
+    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
+    public static T Load(string path) => Load(path, () => new T());
+
+    /// <summary>
+    /// Загружает конфиг из файла. Если файла нет - создаёт его с дефолтами (createDefault).
+    /// Если файл уже есть, но в нём не хватает каких-то ключей (плагин обновился и появились
+    /// новые настройки) - дописывает в файл только отсутствующие ключи с их дефолтными
+    /// значениями, не трогая то, что уже настроено пользователем.
+    /// </summary>
+    public static T Load(string path, Func<T> createDefault)
+    {
         if (!File.Exists(path))
         {
-            var config = new T();
+            var config = createDefault();
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? string.Empty);
-            File.WriteAllText(path, JsonSerializer.Serialize(config, options));
+            File.WriteAllText(path, JsonSerializer.Serialize(config, Options));
             return config;
         }
 
-        var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<T>(json, options) ?? new T();
+        JsonObject existingNode;
+        try
+        {
+            existingNode = JsonNode.Parse(File.ReadAllText(path)) as JsonObject ?? new JsonObject();
+        }
+        catch (JsonException)
+        {
+            // Повреждённый JSON - не перетираем файл автоматически, просто отдаём дефолты в память.
+            return createDefault();
+        }
+
+        var defaultNode = JsonSerializer.SerializeToNode(createDefault(), Options) as JsonObject ?? new JsonObject();
+
+        if (MergeMissingKeys(existingNode, defaultNode))
+            File.WriteAllText(path, existingNode.ToJsonString(Options));
+
+        return existingNode.Deserialize<T>(Options) ?? createDefault();
+    }
+
+    // Рекурсивно добавляет в target ключи, которых там нет, но которые есть в source (дефолтах).
+    // Существующие значения никогда не перезаписываются.
+    private static bool MergeMissingKeys(JsonObject target, JsonObject source)
+    {
+        var changed = false;
+        foreach (var kvp in source)
+        {
+            if (!target.ContainsKey(kvp.Key))
+            {
+                target[kvp.Key] = kvp.Value?.DeepClone();
+                changed = true;
+            }
+            else if (target[kvp.Key] is JsonObject targetChild && kvp.Value is JsonObject sourceChild)
+            {
+                if (MergeMissingKeys(targetChild, sourceChild))
+                    changed = true;
+            }
+        }
+
+        return changed;
     }
 }
 
@@ -41,22 +84,7 @@ public static class ExperienceSettings
         if (_logger == null)
             throw new InvalidOperationException("Logger not initialized. Call Initialize() method first.");
 
-        if (File.Exists(settingsFilePath))
-        {
-            var json = File.ReadAllText(settingsFilePath);
-            Experience = JsonSerializer.Deserialize<ExperienceConfig>(json) ?? new ExperienceConfig();
-        }
-        else
-        {
-            GenerateDefaultConfig(settingsFilePath);
-        }
-    }
-
-    private static void GenerateDefaultConfig(string settingsFilePath)
-    {
-        var defaultConfig = new ExperienceConfig();
-        var json = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(settingsFilePath, json);
+        Experience = ConfigLoader<ExperienceConfig>.Load(settingsFilePath);
     }
 
     public static double GetExperience(string statisticType, string key)
@@ -154,21 +182,14 @@ public static class RanksSettings
     public static Dictionary<int, RankConfig> Ranks { get; private set; } = new();
 
     public static void Load(string settingsFilePath)
+    public static void Load(string settingsFilePath)
     {
-        if (File.Exists(settingsFilePath))
-        {
-            var json = File.ReadAllText(settingsFilePath);
-            Ranks = JsonSerializer.Deserialize<Dictionary<int, RankConfig>>(json) ?? new Dictionary<int, RankConfig>();
-        }
-        else
-        {
-            GenerateDefaultConfig(settingsFilePath);
-        }
+        Ranks = ConfigLoader<Dictionary<int, RankConfig>>.Load(settingsFilePath, CreateDefaultRanks);
     }
 
-    private static void GenerateDefaultConfig(string settingsFilePath)
+    private static Dictionary<int, RankConfig> CreateDefaultRanks()
     {
-        var defaultRanks = new Dictionary<int, RankConfig>
+        return new Dictionary<int, RankConfig>
         {
             { 1, new RankConfig() },
             { 2, new RankConfig { Value0 = 10, Value1 = 700, Value2 = 850 } },
@@ -189,9 +210,6 @@ public static class RanksSettings
             { 17, new RankConfig { Value0 = 7500, Value1 = 3000, Value2 = 2000 } },
             { 18, new RankConfig { Value0 = 10000, Value1 = 4000, Value2 = 2500 } }
         };
-
-        var json = JsonSerializer.Serialize(defaultRanks, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(settingsFilePath, json);
     }
 
     public static int GetRankForExperience(int experience, string statisticType)
@@ -250,6 +268,29 @@ public class MainSettings
     public string lr_block_warmup { get; set; } = "1";
     public string lr_allagainst_all { get; set; } = "1";
     public string lr_experience_from_bots { get; set; } = "0";
+
+    /// <summary>Количество игроков, выводимых по командам !top и !toptime.</summary>
+    public string lr_top_count { get; set; } = "10";
+
+    /// <summary>
+    /// Стартовые очки опыта при первом заходе игрока на сервер. Применяется только
+    /// для накопительной системы (lr_type_statistics = "0"); рейтинговые системы
+    /// (1 и 2) всегда стартуют с 1000, как и в оригинальном плагине.
+    /// </summary>
+    public string lr_start_points { get; set; } = "0";
+
+    /// <summary>
+    /// Через сколько дней отсутствия игрока скрывать его из топов/статистики
+    /// (не удаляя саму запись из БД). 0 - отключить автоочистку.
+    /// </summary>
+    public string lr_cleandb_days { get; set; } = "30";
+
+    /// <summary>
+    /// Как часто сохранять данные игрока в БД:
+    /// "0" - только при выходе игрока с сервера (меньше нагрузка на БД);
+    /// "1" - также каждые 5 секунд батчем, при смене ранга и в конце раунда (актуальные данные).
+    /// </summary>
+    public string lr_db_savedataplayer_mode { get; set; } = "1";
 }
 
 public class DatabaseConnection
