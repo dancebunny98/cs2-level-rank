@@ -7,7 +7,10 @@
         <!-- Core = единая сборка с РЕАЛИЗАЦИЕЙ. Публичный контракт (ILevelsRanksApi,
              User) живёт отдельно в Api/LevelsRanksApi.csproj и деплоится в shared/ -
              так его резолвят все плагины (включая сам Core) как одну и ту же сборку. -->
-        <AssemblyName>LVLCore</AssemblyName>
+        <!-- Имя итоговой DLL/папки плагина - без пробелов и скобок специально,
+             чтобы исключить баги CounterStrikeSharp с "Failed to locate managed
+             application" из-за несовпадения имени папки и файла. -->
+        <AssemblyName>LevelsRanksCore</AssemblyName>
         <RootNamespace>LevelsRanks</RootNamespace>
     </PropertyGroup>
 
@@ -30,5 +33,11 @@
             <HintPath>MenuManagerApi.dll</HintPath>
             <Private>true</Private>
         </Reference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="lang\**\*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
     </ItemGroup>
 </Project>

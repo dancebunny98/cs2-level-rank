@@ -4,6 +4,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- Имя итоговой DLL/папки плагина - без пробелов и скобок, чтобы избежать
+         багов CounterStrikeSharp с несовпадением имени папки и файла. -->
+    <AssemblyName>LR_VIP_ExperienceMultiplier</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>

@@ -8,6 +8,10 @@
     <!-- В этой папке лежат исходники ДВУХ проектов (этого модуля и FakeRanksApi) -
          отключаем авто-glob, чтобы каждый проект собирал только свои файлы -->
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
+    <!-- Имя итоговой DLL/папки плагина - без пробелов и скобок, чтобы избежать
+         багов CounterStrikeSharp с несовпадением имени папки и файла. -->
+    <AssemblyName>LR_Module_FakeRank</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
