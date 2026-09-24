@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!-- Имя итоговой DLL/папки плагина - без пробелов и скобок, чтобы избежать
+         багов CounterStrikeSharp с несовпадением имени папки и файла. -->
+    <AssemblyName>LR_Module_PlayersInfo</AssemblyName>
+    <RootNamespace>LevelsRanksModulePlayersInfo</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.366" />
+
+    <!-- Контракт LevelsRanksApi - разделяемая сборка
+         (addons/counterstrikesharp/shared/LevelsRanksApi/).
+         Private=false: свою копию в папку этого плагина класть не нужно и
+         вредно - иначе PluginCapability<ILevelsRanksApi> будет падать с ошибкой
+         приведения типов между разными AssemblyLoadContext. -->
+    <ProjectReference Include="..\..\Api\LevelsRanksApi.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

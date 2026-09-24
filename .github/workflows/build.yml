@@ -80,6 +80,7 @@ jobs:
           dotnet publish "modules/CS2-LR-ExStats-Weapons/[LR] Module - ExStats Weapons.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_ExStatsWeapons"
           dotnet publish "modules/CS2-LR-Module-Tag/[LR] Module - Tag.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_Tag"
           dotnet publish "modules/CS2-LR-UnusualKills/[LR] Module - UnusualKills.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_UnusualKills"
+          dotnet publish "modules/CS2-LR-PlayersInfo/[LR] Module - PlayersInfo.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_PlayersInfo"
 
       # VIP-модули зависят от стороннего VipCoreApi.dll, который не хранится в
       # репозитории (см. libs/README.md). Публикуем их отдельно и не роняем

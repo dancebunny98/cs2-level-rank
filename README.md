@@ -7,7 +7,7 @@
 - `Api/` — отдельный проект `LevelsRanksApi.csproj`, контракт (`ILevelsRanksApi`,
   `User`). Собирается в `LevelsRanksApi.dll` — это разделяемая (`shared/`) сборка,
   через которую Core и модули общаются друг с другом.
-- `modules/` — модули (FakeRank, ExStats-Hits, ExStats-Weapons, Tag, VIP-*).
+- `modules/` — модули (FakeRank, ExStats-Hits, ExStats-Weapons, Tag, PlayersInfo, VIP-*).
   Каждый — отдельный плагин, ссылается только на `Api/LevelsRanksApi.csproj`
   (реализация Core им для компиляции не нужна — они видят только интерфейс).
 - `libs/` — сюда нужно вручную положить сторонние DLL (`VipCoreApi.dll`), от
@@ -53,6 +53,7 @@ addons/counterstrikesharp/
     ├── LR Module - ExStats Hits/
     ├── LR Module - ExStats Weapons/
     ├── LR Module - Tag/
+    ├── LR Module - PlayersInfo/
     ├── VIP LR ExperienceMultiplier/   (если собирали)
     └── VIP CustomFakeRank/            (если собирали)
 ```
