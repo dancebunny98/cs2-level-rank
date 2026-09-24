@@ -123,7 +123,9 @@ namespace LevelsRanksModuleFakeRank
                     if (_useRawExperienceAsRanking)
                     {
                         // Type "3": ранг = сырое значение опыта игрока (без таблицы FakeRank).
-                        rankInfo = (onlineUser.Value, _rankTypeForConfig);
+                        // Игра не отображает числа > 99999, поэтому зажимаем.
+                        var displayValue = Math.Min(onlineUser.Value, 99999);
+                        rankInfo = (displayValue, _rankTypeForConfig);
                     }
                     else if (_ranksConfig == null || !_ranksConfig.TryGetValue(onlineUser.Rank, out rankInfo))
                     {
