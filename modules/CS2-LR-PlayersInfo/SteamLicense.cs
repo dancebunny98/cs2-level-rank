@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using CounterStrikeSharp.API;
 using Microsoft.Extensions.Logging;
@@ -8,6 +9,8 @@ namespace LevelsRanksModulePlayersInfo;
 /// Thin wrapper over the Steamworks flat API of the already-loaded steam_api library:
 /// ISteamGameServer::UserHasLicenseForApp(steamId, appId).
 /// The original C++ plugin calls the same method through SteamGameServer().
+/// Results are cached per SteamID (like the FluteCS2PlayersList fork's g_PrimeCache),
+/// since UserHasLicenseForApp is a blocking Steam API call.
 /// </summary>
 internal static class SteamLicense
 {
@@ -27,6 +30,9 @@ internal static class SteamLicense
     private static nint _library;
     private static GetGameServerDelegate? _getGameServer;
     private static UserHasLicenseForAppDelegate? _userHasLicenseForApp;
+
+    // steamid64 -> has prime. Cleared on map start (ClearCache), same lifetime as the original's cache.
+    private static readonly ConcurrentDictionary<ulong, bool> Cache = new();
 
     public static bool Available => _getGameServer is not null && _userHasLicenseForApp is not null;
 
@@ -75,6 +81,7 @@ internal static class SteamLicense
     {
         _getGameServer = null;
         _userHasLicenseForApp = null;
+        Cache.Clear();
         if (_library != 0)
         {
             NativeLibrary.Free(_library);
@@ -82,17 +89,26 @@ internal static class SteamLicense
         }
     }
 
+    /// <summary>Drops all cached results. Call on map start, like the fork's g_PrimeCache.clear().</summary>
+    public static void ClearCache() => Cache.Clear();
+
     public static bool HasPrime(ulong steamId)
     {
         if (steamId == 0 || !Available)
             return false;
 
+        if (Cache.TryGetValue(steamId, out var cached))
+            return cached;
+
         var server = _getGameServer!();
         if (server == 0)
             return false;
 
-        return _userHasLicenseForApp!(server, steamId, AppIdA) == HasLicense ||
-               _userHasLicenseForApp!(server, steamId, AppIdB) == HasLicense;
+        var prime = _userHasLicenseForApp!(server, steamId, AppIdA) == HasLicense ||
+                    _userHasLicenseForApp!(server, steamId, AppIdB) == HasLicense;
+
+        Cache[steamId] = prime;
+        return prime;
     }
 
     private static nint LoadSteamApi()

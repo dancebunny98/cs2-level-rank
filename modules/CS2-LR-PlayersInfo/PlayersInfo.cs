@@ -21,14 +21,14 @@ public class PlayersInfoConfig : BasePluginConfig
     public bool ResetPlaytimeOnMapStart { get; set; } = true;
 
     /// <summary>
-    /// false = поведение оригинала: игроки без CCSPlayerPawn (спектаторы, подключающиеся) пропускаются.
+    /// false = поведение оригинала: игроки без CCSPlayerPawn (спектаторы, подключающиеся) пропускаются
+    /// в mm_getinfo (но не в mm_getinfo_slot - тот всегда отвечает, если слот занят реальным игроком).
     /// </summary>
     [JsonPropertyName("IncludePlayersWithoutPawn")]
     public bool IncludePlayersWithoutPawn { get; set; } = false;
 
     /// <summary>
     /// true = дополнительно выводить поле "exp" (опыт игрока из LevelsRanks, User.Value).
-    /// false = формат ровно как у оригинала.
     /// </summary>
     [JsonPropertyName("IncludeExperience")]
     public bool IncludeExperience { get; set; } = false;
@@ -38,10 +38,10 @@ public class PlayersInfoConfig : BasePluginConfig
 public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
 {
     public override string ModuleName => "[LR] Module - PlayersInfo";
-    public override string ModuleVersion => "1.0.1";
-    public override string ModuleAuthor => "CounterStrikeSharp port of Pisex's PlayersInfo";
+    public override string ModuleVersion => "1.3.2";
+    public override string ModuleAuthor => "CounterStrikeSharp port of Pisex's PlayersInfo / FluteCS2PlayersList";
     public override string ModuleDescription =>
-        "Prints server and players info (incl. LevelsRanks rank) as JSON via the mm_getinfo console command";
+        "Prints server and players info (incl. LevelsRanks rank) as JSON via mm_getinfo / mm_getinfo_slot / mm_getinfo_file";
 
     private const int MaxSlots = 64;
     private const byte TeamT = 2;
@@ -51,6 +51,7 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
     {
         WriteIndented = false,
         // Как nlohmann::json::dump(): не-ASCII символы пишутся как есть (UTF-8), а не \uXXXX.
+        // .NET-строки уже валидный Unicode, поэтому санитайзер невалидных байт из форка не нужен.
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
@@ -67,7 +68,9 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
     {
         SteamLicense.Init(Logger);
 
-        AddCommand("mm_getinfo", "Prints server and players info as JSON", OnGetInfoCommand);
+        AddCommand("mm_getinfo", "Dump full server info as JSON to console", OnGetInfoCommand);
+        AddCommand("mm_getinfo_slot", "Dump single player JSON for slot <N> (or {} if empty)", OnGetInfoSlotCommand);
+        AddCommand("mm_getinfo_file", "Dump full server info as JSON to <path> atomically", OnGetInfoFileCommand);
 
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnClientConnected>(OnClientConnected);
@@ -100,6 +103,9 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
 
     private void OnMapStart(string mapName)
     {
+        // Как в форке: кэш Prime не переживает смену карты (сервер мог заново залогиниться в Steam).
+        SteamLicense.ClearCache();
+
         if (!Config.ResetPlaytimeOnMapStart)
             return;
 
@@ -127,16 +133,50 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
             _connectedAt[slot] = 0;
     }
 
-    // ---- команда ----
+    // ---- команды ----
 
     private void OnGetInfoCommand(CCSPlayerController? caller, CommandInfo command)
     {
-        // Только консоль сервера / RCON.
+        if (caller is not null) // только консоль сервера / RCON
+            return;
+
+        command.ReplyToCommand(JsonSerializer.Serialize(BuildServerInfo(), JsonOptions));
+    }
+
+    private void OnGetInfoSlotCommand(CCSPlayerController? caller, CommandInfo command)
+    {
         if (caller is not null)
             return;
 
+        if (command.ArgCount < 2 || !int.TryParse(command.GetArg(1), out var slot))
+        {
+            command.ReplyToCommand("usage: mm_getinfo_slot <slot>");
+            return;
+        }
+
+        var player = TryBuildPlayer(slot);
+        command.ReplyToCommand(player is null
+            ? "{}"
+            : JsonSerializer.Serialize(player, JsonOptions));
+    }
+
+    private void OnGetInfoFileCommand(CCSPlayerController? caller, CommandInfo command)
+    {
+        if (caller is not null)
+            return;
+
+        if (command.ArgCount < 2)
+        {
+            command.ReplyToCommand("usage: mm_getinfo_file <path>");
+            return;
+        }
+
+        var path = command.GetArg(1);
         var json = JsonSerializer.Serialize(BuildServerInfo(), JsonOptions);
-        command.ReplyToCommand(json);
+
+        command.ReplyToCommand(WriteFileAtomic(path, json)
+            ? "mm_getinfo_file: ok"
+            : "mm_getinfo_file: failed");
     }
 
     // ---- сбор данных (GetServerInfo в оригинале) ----
@@ -146,60 +186,13 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         var (scoreCt, scoreT) = GetTeamScores();
         var now = Now();
 
-        // Ядро LevelsRanks может быть перезагружено, поэтому API берём заново при каждом вызове.
-        var api = _apiCapability.Get();
-
         var players = new List<SortedDictionary<string, object?>>();
 
         for (var slot = 0; slot < MaxSlots; slot++)
         {
-            if (_connectedAt[slot] == 0)
-                continue;
-
-            var controller = Utilities.GetPlayerFromSlot(slot);
-            if (controller is null || !controller.IsValid)
-                continue;
-
-            if (!Config.IncludePlayersWithoutPawn && controller.PlayerPawn.Value is null)
-                continue;
-
-            var name = controller.PlayerName;
-            var steamId = controller.SteamID;
-
-            var player = NewObject();
-            player["userid"] = slot;
-            player["name"] = string.IsNullOrEmpty(name) ? "Unknown" : name;
-            player["team"] = (int)controller.TeamNum;
-            player["steamid"] = steamId.ToString();
-
-            var tracking = controller.ActionTrackingServices;
-            if (tracking is not null)
-            {
-                var stats = tracking.MatchStats;
-                player["kills"] = stats.Kills;
-                player["death"] = stats.Deaths;
-                player["headshots"] = stats.HeadShotKills;
-            }
-
-            player["ping"] = controller.Ping;
-            player["playtime"] = now - _connectedAt[slot];
-            player["prime"] = SteamLicense.HasPrime(steamId);
-
-            // LevelsRanks: ранг (ST_RANK в оригинале) берётся из OnlineUsers ядра.
-            // Игрок, ещё не загруженный ядром (бот, идёт загрузка из БД), получает rank = 0.
-            if (api is not null)
-            {
-                User? lrUser = null;
-                if (steamId != 0)
-                    api.OnlineUsers.TryGetValue(api.ConvertToSteamId(steamId), out lrUser);
-
-                player["rank"] = lrUser?.Rank ?? 0;
-
-                if (Config.IncludeExperience)
-                    player["exp"] = lrUser?.Value ?? 0;
-            }
-
-            players.Add(player);
+            var player = TryBuildPlayer(slot, now);
+            if (player is not null)
+                players.Add(player);
         }
 
         var info = NewObject();
@@ -207,9 +200,66 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         info["current_map"] = Server.MapName;
         info["score_ct"] = scoreCt;
         info["score_t"] = scoreT;
-        // Оригинал оставляет "players" как JSON null, если список пуст.
+        info["player_count"] = players.Count;
+        // Оригинал оставляет "players" как JSON null, если список пуст; форк - как [].
+        // Оставляем null для совместимости с уже подключёнными клиентами.
         info["players"] = players.Count == 0 ? null : players;
         return info;
+    }
+
+    /// <summary>Собирает JSON одного игрока, либо null, если слот пуст/бот/не прошёл фильтры.</summary>
+    private SortedDictionary<string, object?>? TryBuildPlayer(int slot, long? nowOverride = null)
+    {
+        if (!IsValidSlot(slot) || _connectedAt[slot] == 0)
+            return null;
+
+        var controller = Utilities.GetPlayerFromSlot(slot);
+        if (controller is null || !controller.IsValid)
+            return null;
+
+        // Как в FluteCS2PlayersList: боты и HLTV в отчёт не попадают.
+        if (controller.IsBot)
+            return null;
+
+        var hasPawn = controller.PlayerPawn.Value is not null;
+        if (!Config.IncludePlayersWithoutPawn && !hasPawn)
+            return null;
+
+        var now = nowOverride ?? Now();
+        var name = controller.PlayerName;
+        var steamId = controller.SteamID;
+
+        var player = NewObject();
+        player["userid"] = slot;
+        player["name"] = string.IsNullOrEmpty(name) ? "Unknown" : name;
+        player["team"] = (int)controller.TeamNum;
+        player["steamid"] = steamId.ToString();
+
+        var tracking = controller.ActionTrackingServices;
+        if (tracking is not null)
+        {
+            var stats = tracking.MatchStats;
+            player["kills"] = stats.Kills;
+            player["death"] = stats.Deaths;
+            player["headshots"] = stats.HeadShotKills;
+        }
+
+        player["ping"] = controller.Ping;
+        player["playtime"] = now - _connectedAt[slot];
+        player["prime"] = SteamLicense.HasPrime(steamId);
+        player["alive"] = hasPawn;
+
+        // LevelsRanks: ранг (ST_RANK в оригинале). Поле опускается, если ядро недоступно
+        // или игрок ещё не загружен ядром (бот, идёт загрузка из БД) - как у обоих оригиналов.
+        var api = _apiCapability.Get();
+        if (api is not null && steamId != 0 && api.OnlineUsers.TryGetValue(api.ConvertToSteamId(steamId), out var lrUser))
+        {
+            player["rank"] = lrUser.Rank;
+            if (Config.IncludeExperience)
+                player["exp"] = lrUser.Value;
+        }
+
+        return player;
     }
 
     private static (int ct, int t) GetTeamScores()
@@ -225,6 +275,28 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         }
 
         return (ct, t);
+    }
+
+    /// <summary>
+    /// Атомарная запись файла: пишем во временный файл рядом и переименовываем поверх целевого.
+    /// File.Move(..., overwrite: true) на Linux выполняется через rename(2), как и в оригинале -
+    /// читатель никогда не увидит частично записанный JSON.
+    /// </summary>
+    private bool WriteFileAtomic(string path, string content)
+    {
+        var tmpPath = path + ".tmp";
+        try
+        {
+            File.WriteAllText(tmpPath, content);
+            File.Move(tmpPath, path, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "mm_getinfo_file: failed to write {Path}", path);
+            try { File.Delete(tmpPath); } catch { /* ignore */ }
+            return false;
+        }
     }
 
     // ---- вспомогательное ----
