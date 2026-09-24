@@ -77,13 +77,29 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         RegisterListener<Listeners.OnClientPutInServer>(OnClientPutInServer);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
 
-        // Модуль загружен, когда на сервере уже есть игроки.
-        var now = Now();
-        foreach (var player in Utilities.GetPlayers())
+        // Модуль может загрузиться до того, как движок проинициализировал глобальные
+        // переменные (например, при старте сервера ещё до загрузки первой карты) - в этот
+        // момент Utilities.GetPlayers()/Server.MaxPlayers кидает NativeException
+        // "Global Variables not initialized yet". Откладываем скан уже подключённых игроков
+        // (актуален для hot reload посреди карты) на следующий кадр и на всякий случай
+        // страхуемся try/catch, чтобы холодная загрузка без карты не роняла плагин: в этом
+        // случае _connectedAt заполнится штатно через OnClientConnected/OnClientPutInServer.
+        Server.NextFrame(() =>
         {
-            if (IsValidSlot(player.Slot))
-                _connectedAt[player.Slot] = now;
-        }
+            try
+            {
+                var now = Now();
+                foreach (var player in Utilities.GetPlayers())
+                {
+                    if (IsValidSlot(player.Slot))
+                        _connectedAt[player.Slot] = now;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "PlayersInfo: skipped initial player scan, globals not ready yet.");
+            }
+        });
     }
 
     public override void OnAllPluginsLoaded(bool hotReload)
