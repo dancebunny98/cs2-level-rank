@@ -80,7 +80,7 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
     // Unix time подключения по слотам; 0 = слот не подключён.
     private readonly long[] _connectedAt = new long[MaxSlots];
 
-    private Timer? _autoDumpTimer;
+    private CounterStrikeSharp.API.Modules.Timers.Timer? _autoDumpTimer;
 
     public PlayersInfoConfig Config { get; set; } = new();
 
