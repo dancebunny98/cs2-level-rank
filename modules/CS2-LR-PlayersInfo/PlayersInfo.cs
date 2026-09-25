@@ -6,6 +6,7 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes;
 using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Commands;
+using CounterStrikeSharp.API.Modules.Timers;
 using LevelsRanksApi;
 using Microsoft.Extensions.Logging;
 
@@ -32,6 +33,25 @@ public class PlayersInfoConfig : BasePluginConfig
     /// </summary>
     [JsonPropertyName("IncludeExperience")]
     public bool IncludeExperience { get; set; } = false;
+
+    /// <summary>
+    /// true = помимо ответов на mm_getinfo/mm_getinfo_file, модуль сам периодически
+    /// пишет полный дамп в AutoDumpPath. Позволяет сайту читать свежие данные файлом,
+    /// не завися от того, успешен ли RCON в конкретный момент запроса.
+    /// </summary>
+    [JsonPropertyName("AutoDumpEnabled")]
+    public bool AutoDumpEnabled { get; set; } = true;
+
+    /// <summary>Интервал автодампа в секундах.</summary>
+    [JsonPropertyName("AutoDumpIntervalSeconds")]
+    public float AutoDumpIntervalSeconds { get; set; } = 5f;
+
+    /// <summary>
+    /// Путь к файлу дампа. Относительный путь резолвится от папки модуля
+    /// (ModuleDirectory). Положите его на volume/каталог, расшаренный с веб-сервером.
+    /// </summary>
+    [JsonPropertyName("AutoDumpPath")]
+    public string AutoDumpPath { get; set; } = "mm_getinfo.json";
 }
 
 [MinimumApiVersion(80)]
@@ -60,6 +80,8 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
     // Unix time подключения по слотам; 0 = слот не подключён.
     private readonly long[] _connectedAt = new long[MaxSlots];
 
+    private Timer? _autoDumpTimer;
+
     public PlayersInfoConfig Config { get; set; } = new();
 
     public void OnConfigParsed(PlayersInfoConfig config) => Config = config;
@@ -76,6 +98,14 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         RegisterListener<Listeners.OnClientConnected>(OnClientConnected);
         RegisterListener<Listeners.OnClientPutInServer>(OnClientPutInServer);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
+
+        if (Config.AutoDumpEnabled)
+        {
+            _autoDumpTimer = AddTimer(
+                Math.Max(1f, Config.AutoDumpIntervalSeconds),
+                AutoDumpTick,
+                TimerFlags.REPEAT);
+        }
 
         // Модуль может загрузиться до того, как движок проинициализировал глобальные
         // переменные (например, при старте сервера ещё до загрузки первой карты) - в этот
@@ -112,6 +142,8 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
 
     public override void Unload(bool hotReload)
     {
+        _autoDumpTimer?.Kill();
+        _autoDumpTimer = null;
         SteamLicense.Shutdown();
     }
 
@@ -193,6 +225,28 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         command.ReplyToCommand(WriteFileAtomic(path, json)
             ? "mm_getinfo_file: ok"
             : "mm_getinfo_file: failed");
+    }
+
+    /// <summary>
+    /// Периодический таймер (Config.AutoDumpIntervalSeconds): пишет тот же JSON, что и
+    /// mm_getinfo, атомарно в файл. Сайт читает этот файл напрямую вместо RCON-запроса
+    /// на каждый визит - RCON остаётся только резервным путём на случай отсутствия/протухания файла.
+    /// </summary>
+    private void AutoDumpTick()
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(BuildServerInfo(), JsonOptions);
+            var path = Path.IsPathRooted(Config.AutoDumpPath)
+                ? Config.AutoDumpPath
+                : Path.Combine(ModuleDirectory, Config.AutoDumpPath);
+
+            WriteFileAtomic(path, json);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "PlayersInfo: auto-dump failed");
+        }
     }
 
     // ---- сбор данных (GetServerInfo в оригинале) ----
