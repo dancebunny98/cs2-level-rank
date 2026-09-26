@@ -260,7 +260,19 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
 
         for (var slot = 0; slot < MaxSlots; slot++)
         {
-            var player = TryBuildPlayer(slot, now);
+            SortedDictionary<string, object?>? player;
+            try
+            {
+                player = TryBuildPlayer(slot, now);
+            }
+            catch (Exception ex)
+            {
+                // Один нестабильный слот (например, в момент коннекта/дисконнекта) не должен
+                // ронять весь ответ mm_getinfo для остальных игроков.
+                Logger.LogDebug(ex, "PlayersInfo: skipped slot {Slot} due to error", slot);
+                continue;
+            }
+
             if (player is not null)
                 players.Add(player);
         }
@@ -291,7 +303,7 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         if (controller.IsBot)
             return null;
 
-        var hasPawn = controller.PlayerPawn.Value is not null;
+        var hasPawn = controller.PlayerPawn.Value is { IsValid: true };
         if (!Config.IncludePlayersWithoutPawn && !hasPawn)
             return null;
 
@@ -305,10 +317,12 @@ public class PlayersInfoModule : BasePlugin, IPluginConfig<PlayersInfoConfig>
         player["team"] = (int)controller.TeamNum;
         player["steamid"] = steamId.ToString();
 
+        // ActionTrackingServices у CS2 бывает не null, но со внутренним MatchStats == null
+        // в момент коннекта/смены команды - раньше это роняло NullReferenceException.
         var tracking = controller.ActionTrackingServices;
-        if (tracking is not null)
+        var stats = tracking?.MatchStats;
+        if (stats is not null)
         {
-            var stats = tracking.MatchStats;
             player["kills"] = stats.Kills;
             player["death"] = stats.Deaths;
             player["headshots"] = stats.HeadShotKills;
