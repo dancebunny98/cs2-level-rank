@@ -181,26 +181,13 @@ namespace LevelsRanksModuleFakeRank
                 "This usually means Core failed to load/authorize this user (check Core logs for DB errors); FakeRank will keep retrying.");
         }
 
-        // Как часто принудительно "довещаем" всем клиентам актуальные ранги (usermsg 350),
-        // независимо от того, менялось ли что-то в эту секунду. Нужно потому, что usermsg 350 -
-        // это триггер "покажи мне ранги всех" ДЛЯ ТОГО КЛИЕНТА, КОМУ ОН ОТПРАВЛЕН, а не заявление
-        // "у этого игрока такой-то ранг" для всех остальных. Раньше сообщение уходило только
-        // тому игроку, у кого только что изменилось значение (RecipientFilter из одного человека) -
-        // остальные клиенты вообще не получали triggеr на обновление своего таба для этого игрока.
-        // Плюс сам клиент CS2, пока открыт таб, время от времени сам запрашивает у сервера
-        // "настоящий" (заниженный/анврайтенный) ранг - без периодической повторной рассылки
-        // нашего фейкового значения ВСЕМ клиентам это и давало то самое мерцание
-        // "то текущий, то как будто другой ранг".
-        private const float RankRevealInterval = 2.0f;
-        private float _timeSinceLastReveal;
-
         private void OnTick()
         {
             var players = Utilities.GetPlayers()
-                .Where(player => !player.IsBot && player.TeamNum != (int)CsTeam.Spectator).ToList();
+                .Where(player => !player.IsBot && player.TeamNum != (int)CsTeam.Spectator);
 
-            var anyChanged = false;
-
+            var filter = new RecipientFilter();
+            
             foreach (var player in players)
             {
                 var steamId64 = player.SteamID;
@@ -216,7 +203,7 @@ namespace LevelsRanksModuleFakeRank
                         player.CompetitiveRankType = (sbyte)customRank.RankType;
                         player.CompetitiveRanking = customRank.Rank;
                         player.CompetitiveWins = 777;
-                        anyChanged = true;
+                        filter.Add(player);
                     }
                 }
                 else
@@ -229,40 +216,16 @@ namespace LevelsRanksModuleFakeRank
                             player.CompetitiveRankType = (sbyte)rankInfo.competitiveRankType;
                             player.CompetitiveRanking = rankInfo.competitiveRanking;
                             player.CompetitiveWins = 777;
-                            anyChanged = true;
+                            filter.Add(player);
                         }
                     }
                 }
             }
 
-            // Реальное изменение ранга - рассылаем ревил всем сразу, не дожидаясь таймера ниже,
-            // чтобы левел-ап/даун появился в табе у всех без задержки в RankRevealInterval секунд.
-            if (anyChanged)
-            {
-                BroadcastRankReveal();
-                _timeSinceLastReveal = 0f;
-                return;
-            }
-
-            _timeSinceLastReveal += Server.TickInterval;
-            if (_timeSinceLastReveal < RankRevealInterval) return;
-
-            _timeSinceLastReveal = 0f;
-            BroadcastRankReveal();
-        }
-
-        // Отправляет usermsg 350 ВСЕМ подключённым (не боты) клиентам - каждому из них "скажи
-        // покажи актуальные ранги всех игроков", а не только тому, чей ранг только что поменялся.
-        private void BroadcastRankReveal()
-        {
-            var recipients = new RecipientFilter();
-            foreach (var p in Utilities.GetPlayers().Where(p => !p.IsBot && p.IsValid))
-                recipients.Add(p);
-
-            if (recipients.Count > 0)
+            if (filter.Count > 0)
             {
                 var msg = UserMessage.FromId(350);
-                msg.Send(recipients);
+                msg.Send(filter);
             }
         }
 
