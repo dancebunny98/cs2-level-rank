@@ -405,7 +405,11 @@ public class LevelsRanks : BasePlugin
 
     private void OnClientAuthorized(CCSPlayerController player, SteamID steamId)
     {
-        var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID!.SteamId64);
+        // Используем SteamID, переданный листенером напрямую, а не player.AuthorizedSteamID:
+        // на момент вызова это поле у игрока иногда ещё не проставлено движком, и обращение
+        // к нему через "!" роняло NullReferenceException, из-за чего игрок вообще не попадал
+        // в OnlineUsers (и, как следствие, у него не отображался ранг).
+        var steamIdStr = SteamIdConverter.ConvertToSteamId(steamId.SteamId64);
         var playerName = player.PlayerName;
 
         Task.Run(async () =>
@@ -1151,7 +1155,13 @@ public class LevelsRanks : BasePlugin
                 return;
             }
 
-            var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID!.SteamId64);
+            if (player.AuthorizedSteamID == null)
+            {
+                player.PrintToChat(ReplaceColorPlaceholders(Localizer["user_data_not_found"]));
+                return;
+            }
+
+            var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
             if (!OnlineUsers.TryGetValue(steamIdStr, out var user))
             {
                 player.PrintToChat(ReplaceColorPlaceholders(Localizer["user_data_not_found"]));
