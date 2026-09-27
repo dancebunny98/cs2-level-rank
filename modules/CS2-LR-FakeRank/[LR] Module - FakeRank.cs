@@ -1,376 +1,560 @@
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Threading.Tasks;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Core.Attributes;
-using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Timers;
-using CounterStrikeSharp.API.Modules.UserMessages;
 using CounterStrikeSharp.API.Modules.Utils;
-using LevelsRanksApi;
-using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 
-namespace LevelsRanksModuleFakeRank
+public class LevelsRanksModuleFakeRank : BasePlugin
 {
-    [MinimumApiVersion(80)]
-    public class LevelsRanksModuleFakeRank : BasePlugin
+    public override string ModuleName => "LevelsRanksModuleFakeRank";
+    public override string ModuleVersion => "1.0.5";
+    public override string ModuleAuthor => "LevelsRanksModuleFakeRank";
+
+    private LevelsRanksApi? _api;
+    private PlayerRankApi? _playerRankApi;
+
+    private readonly PluginCapability<LevelsRanksApi> _apiCapability =
+        new("levelsranks:api");
+
+    private readonly PluginCapability<PlayerRankApi> _playerRankApiCapability =
+        new("levelsranks:player-rank");
+
+    private Dictionary<int, RankInfo>? _ranksConfig;
+
+    private const float RefreshInterval = 2.0f;
+    private const float SpawnApplyDelay = 0.2f;
+
+    // Какой fake rank сейчас должен быть у игрока.
+    private readonly ConcurrentDictionary<ulong, RankData> _playerRankCache = new();
+
+    // Какой rank мы последний раз реально применили.
+    private readonly ConcurrentDictionary<ulong, RankData> _appliedRanks = new();
+
+    // Последний известный уровень LevelsRanks.
+    private readonly ConcurrentDictionary<ulong, int> _lastKnownLevels = new();
+
+    private readonly record struct RankData(
+        int Rank,
+        int RankType,
+        int Wins,
+        bool IsCustom
+    );
+
+    private readonly record struct RankInfo(
+        int competitiveRanking,
+        int competitiveRankType
+    );
+
+    public override void Load(bool hotReload)
     {
-        public override string ModuleName => "[LR] Module - FakeRank";
-        public override string ModuleVersion => "1.0.3";
-        public override string ModuleAuthor => "ABKAM designed by RoadSide Romeo & Wend4r";
+        _playerRankApi = new PlayerRankApi(this);
 
-        private Dictionary<int, (int competitiveRanking, int competitiveRankType)>? _ranksConfig;
-        private readonly Dictionary<string, (int competitiveRanking, int competitiveRankType)> _playerRanks = new();
+        Capabilities.RegisterPluginCapability(
+            _playerRankApiCapability,
+            () => _playerRankApi
+        );
 
-        // Type "3" из оригинального плагина (Pisex): вместо таблицы FakeRank ранг
-        // показывается как сырое значение опыта игрока (аналог Premier rating).
-        // Type "4": ранг берётся из таблицы FakeRank (как в 0/1/2), но отображается
-        // с competitiveRankType = 11, как и Type "3".
-        private bool _useRawExperienceAsRanking;
-        private int _rankTypeForConfig;
-        private ILevelsRanksApi? _api;
-        private readonly PluginCapability<ILevelsRanksApi> _apiCapability = new("levels_ranks");
-        private IPlayerRankApi? _playerRankApi;
-        private readonly PluginCapability<IPlayerRankApi> _playerRankApiCapability = new("PLAYER_RANK_API");
-        private readonly Dictionary<string, (int competitiveRanking, int competitiveRankType)> _lastKnownRankInfo = new();
-        private ConcurrentDictionary<string, (int competitiveRanking, int competitiveRankType)> _rankCache = new();
-        private ConcurrentDictionary<string, DateTime> _cacheTimestamps = new();
+        RegisterListener<Listeners.OnClientConnected>(OnClientConnected);
+        RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
 
-        private readonly ConcurrentDictionary<string, bool>
-            _isCustomRankActive = new();
+        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
 
-        // Отслеживание игроков, которые ещё не появились в OnlineUsers (обычно это
-        // нормальная короткая гонка сразу после коннекта, пока Core асинхронно
-        // подгружает пользователя из БД). Раньше это логировалось каждую секунду для
-        // каждого такого игрока, что засоряло логи. Теперь: тихо ждём grace-период,
-        // и если игрок так и не появился - предупреждаем один раз, а не каждый тик.
-        private readonly ConcurrentDictionary<string, DateTime> _missingFirstSeen = new();
-        private readonly ConcurrentDictionary<string, DateTime> _missingLastWarned = new();
-        private static readonly TimeSpan MissingGracePeriod = TimeSpan.FromSeconds(10);
-        private static readonly TimeSpan MissingWarnCooldown = TimeSpan.FromSeconds(60);
+        RegisterEventHandler<EventRoundStart>(
+            OnRoundStart
+        );
+    }
 
-        private const float UpdateInterval = 1.0f;
 
-        public override void Load(bool hotReload)
+    public override void OnAllPluginsLoaded(bool hotReload)
+    {
+        _api = _apiCapability.Get();
+
+        if (_api == null)
         {
-            _playerRankApi = new PlayerRankApi(this);
-            Capabilities.RegisterPluginCapability(_playerRankApiCapability, () => _playerRankApi);
+            Server.PrintToConsole(
+                "[FakeRank] LevelsRanks API unavailable."
+            );
+
+            return;
         }
 
-        public override void OnAllPluginsLoaded(bool hotReload)
-        {
-            base.OnAllPluginsLoaded(hotReload);
+        CreateRanksConfig();
+        _ranksConfig = LoadRanksConfig();
 
-            _api = _apiCapability.Get();
-            if (_api == null)
+        // LR проверяется раз в 2 секунды.
+        //
+        // Здесь НЕТ чтения custom rank с диска.
+        AddTimer(
+            RefreshInterval,
+            RefreshLRRanks,
+            TimerFlags.REPEAT
+        );
+
+        // При hot reload игроки уже подключены.
+        // Поэтому необходимо загрузить их custom rank.
+        if (hotReload)
+        {
+            foreach (var player in Utilities.GetPlayers())
             {
-                Server.PrintToConsole("Levels Ranks API is currently unavailable.");
-                return;
+                if (!IsValidPlayer(player))
+                    continue;
+
+                RefreshCustomRank(player);
             }
 
-            PlayerRankApi.ServerId = _api.ServerId;
+            AddTimer(
+                0.5f,
+                ReapplyAll,
+                TimerFlags.STOP_ON_MAPCHANGE
+            );
+        }
+    }
 
-            CreateRanksConfig();
-            _ranksConfig = LoadRanksConfig();
 
-            RegisterListener<Listeners.OnTick>(OnTick);
-            AddTimer(UpdateInterval, async () => { await FetchPlayerRanks(); }, TimerFlags.REPEAT);
+    private void OnClientConnected(int slot)
+    {
+        var player = Utilities.GetPlayerFromSlot(slot);
 
-            RegisterEventHandler<EventPlayerDisconnect>((@event, info) =>
+        if (!IsValidPlayer(player))
+            return;
+
+        /*
+         * Custom rank читаем только здесь.
+         *
+         * Никакого LoadPlayerRankFromFile() в OnTick
+         * или в LR timer нет.
+         */
+        RefreshCustomRank(player);
+    }
+
+    private void OnClientDisconnect(int slot)
+    {
+        var player = Utilities.GetPlayerFromSlot(slot);
+
+        if (player == null)
+            return;
+
+        var steamId = player.SteamID;
+
+        _playerRankCache.TryRemove(
+            steamId,
+            out _
+        );
+
+        _appliedRanks.TryRemove(
+            steamId,
+            out _
+        );
+
+        _lastKnownLevels.TryRemove(
+            steamId,
+            out _
+        );
+    }
+
+    private void RefreshCustomRank(
+        CCSPlayerController player)
+    {
+        if (!IsValidPlayer(player))
+            return;
+
+        var steamId = player.SteamID;
+
+        var custom =
+            PlayerRankApi.LoadPlayerRankFromFile(steamId);
+
+        if (custom != null)
+        {
+            var rankData = new RankData(
+                custom.Rank,
+                custom.RankType,
+                777,
+                true
+            );
+
+            _playerRankCache[steamId] = rankData;
+
+            /*
+             * Если custom rank изменился,
+             * старый applied rank больше не актуален.
+             */
+            _appliedRanks.TryRemove(
+                steamId,
+                out _
+            );
+
+            return;
+        }
+
+        /*
+         * Custom rank отсутствует.
+         *
+         * Не удаляем LR level.
+         * RefreshLRRanks() сам поставит LR rank.
+         */
+        if (_playerRankCache.TryGetValue(
+                steamId,
+                out var existing) &&
+            existing.IsCustom)
+        {
+            _playerRankCache.TryRemove(
+                steamId,
+                out _
+            );
+
+            _appliedRanks.TryRemove(
+                steamId,
+                out _
+            );
+        }
+    }
+
+    private void RefreshLRRanks()
+    {
+        if (_api == null)
+            return;
+
+        foreach (var player in Utilities.GetPlayers())
+        {
+            if (!IsValidPlayer(player))
+                continue;
+
+            if (player.TeamNum == (int)CsTeam.Spectator)
+                continue;
+
+            var steamId = player.SteamID;
+
+            var lrSteamId =
+                _api.ConvertToSteamId(steamId);
+
+            if (!_api.OnlineUsers.TryGetValue(
+                    lrSteamId,
+                    out var onlineUser))
             {
-                var player = @event.Userid;
-                if (player?.AuthorizedSteamID != null)
-                {
-                    var steamId = _api!.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
-                    _missingFirstSeen.TryRemove(steamId, out _);
-                    _missingLastWarned.TryRemove(steamId, out _);
-                }
+                continue;
+            }
 
-                return HookResult.Continue;
+            var level = onlineUser.Rank;
+
+            /*
+             * Если уровень LR не изменился,
+             * ничего не делаем.
+             */
+            if (_lastKnownLevels.TryGetValue(
+                    steamId,
+                    out var lastLevel) &&
+                lastLevel == level)
+            {
+                continue;
+            }
+
+            _lastKnownLevels[steamId] = level;
+
+            /*
+             * Custom rank всегда имеет приоритет.
+             */
+            if (_playerRankCache.TryGetValue(
+                    steamId,
+                    out var currentRank) &&
+                currentRank.IsCustom)
+            {
+                continue;
+            }
+
+            if (_ranksConfig == null)
+                continue;
+
+            if (!_ranksConfig.TryGetValue(
+                    level,
+                    out var rankInfo))
+            {
+                continue;
+            }
+
+            var newRank = new RankData(
+                rankInfo.competitiveRanking,
+                rankInfo.competitiveRankType,
+                777,
+                false
+            );
+
+            /*
+             * Если rank фактически не изменился,
+             * ничего не делаем.
+             */
+            if (_playerRankCache.TryGetValue(
+                    steamId,
+                    out var oldRank) &&
+                oldRank.Equals(newRank))
+            {
+                continue;
+            }
+
+            _playerRankCache[steamId] = newRank;
+
+            /*
+             * Заставляем ApplyRank() применить новый rank.
+             */
+            _appliedRanks.TryRemove(
+                steamId,
+                out _
+            );
+
+            /*
+             * Применяем уже на следующем кадре.
+             */
+            var capturedPlayer = player;
+
+            Server.NextFrame(() =>
+            {
+                if (!IsValidPlayer(capturedPlayer))
+                    return;
+
+                ApplyRank(capturedPlayer);
             });
         }
+    }
+    private HookResult OnPlayerSpawn(
+        EventPlayerSpawn @event,
+        GameEventInfo info)
+    {
+        var player = @event.Userid;
 
-        private async Task FetchPlayerRanks()
+        if (!IsValidPlayer(player))
+            return HookResult.Continue;
+
+        /*
+         * После spawn CS2 может сама перезаписать
+         * CompetitiveRanking / CompetitiveRankType.
+         *
+         * Поэтому ждём 200 мс.
+         */
+        AddTimer(
+            SpawnApplyDelay,
+            () =>
+            {
+                if (!IsValidPlayer(player))
+                    return;
+
+                ApplyRank(player);
+            },
+            TimerFlags.STOP_ON_MAPCHANGE
+        );
+
+        return HookResult.Continue;
+    }
+
+    private HookResult OnRoundStart(
+        EventRoundStart @event,
+        GameEventInfo info)
+    {
+        /*
+         * После начала раунда движок иногда обновляет
+         * scoreboard/player state.
+         *
+         * Поэтому повторно проверяем всех игроков.
+         */
+        AddTimer(
+            0.15f,
+            ReapplyAll,
+            TimerFlags.STOP_ON_MAPCHANGE
+        );
+
+        return HookResult.Continue;
+    }
+
+    private void ApplyRank(
+        CCSPlayerController player)
+    {
+        if (!IsValidPlayer(player))
+            return;
+
+        var steamId = player.SteamID;
+
+        /*
+         * У игрока пока нет rank в нашем cache.
+         */
+        if (!_playerRankCache.TryGetValue(
+                steamId,
+                out var desired))
         {
-            var players = Utilities.GetPlayers()
-                .Where(player => !player.IsBot && player.TeamNum != (int)CsTeam.Spectator);
-            var steamIds = players.Select(player => _api!.ConvertToSteamId(player.SteamID)).ToList();
-
-            var playersToFetch = steamIds.Where(steamId =>
-                    !_rankCache.TryGetValue(steamId, out var cachedRank) ||
-                    !_cacheTimestamps.TryGetValue(steamId, out var cacheTime) ||
-                    (DateTime.UtcNow - cacheTime).TotalSeconds >= UpdateInterval)
-                .ToList();
-
-            if (playersToFetch.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var steamId in playersToFetch)
-            {
-                if (_api!.OnlineUsers.TryGetValue(steamId, out var onlineUser))
-                {
-                    (int competitiveRanking, int competitiveRankType) rankInfo;
-                    var haveRankInfo = true;
-
-                    if (_useRawExperienceAsRanking)
-                    {
-                        // Type "3": ранг = сырое значение опыта игрока (без таблицы FakeRank).
-                        // Игра не отображает числа > 99999, поэтому зажимаем.
-                        var displayValue = Math.Min(onlineUser.Value, 99999);
-                        rankInfo = (displayValue, _rankTypeForConfig);
-                    }
-                    else if (_ranksConfig == null || !_ranksConfig.TryGetValue(onlineUser.Rank, out rankInfo))
-                    {
-                        haveRankInfo = false;
-                        rankInfo = default;
-                    }
-
-                    if (haveRankInfo &&
-                        (!_isCustomRankActive.TryGetValue(steamId, out var isCustomActive) || !isCustomActive))
-                    {
-                        if (!_lastKnownRankInfo.TryGetValue(steamId, out var lastRankInfo) ||
-                            rankInfo != lastRankInfo)
-                        {
-                            _playerRanks[steamId] = rankInfo;
-                            _lastKnownRankInfo[steamId] = rankInfo;
-                            _rankCache[steamId] = rankInfo;
-                            _cacheTimestamps[steamId] = DateTime.UtcNow;
-                        }
-                    }
-                }
-                else
-                {
-                    HandleMissingOnlineUser(steamId);
-                    continue;
-                }
-
-                // Игрок найден в OnlineUsers - сбрасываем накопленное состояние "отсутствия".
-                _missingFirstSeen.TryRemove(steamId, out _);
-                _missingLastWarned.TryRemove(steamId, out _);
-            }
+            return;
         }
 
-        // Игрок из Utilities.GetPlayers() ещё не появился в ILevelsRanksApi.OnlineUsers.
-        // В подавляющем большинстве случаев это нормальная гонка на подключении
-        // (Core ещё выполняет асинхронный запрос к БД) и разрешается за 1-2 тика.
-        // Логируем не каждую секунду, а один раз после grace-периода, и дальше не
-        // чаще, чем раз в MissingWarnCooldown, пока проблема не решится.
-        private void HandleMissingOnlineUser(string steamId)
+        /*
+         * Этот же rank мы уже применяли.
+         *
+         * Не трогаем controller.
+         * Не отправляем UserMessage.
+         */
+        if (_appliedRanks.TryGetValue(
+                steamId,
+                out var applied) &&
+            applied.Equals(desired))
         {
-            var now = DateTime.UtcNow;
-            var firstSeen = _missingFirstSeen.GetOrAdd(steamId, now);
-
-            if (now - firstSeen < MissingGracePeriod)
-                return;
-
-            if (_missingLastWarned.TryGetValue(steamId, out var lastWarned) &&
-                now - lastWarned < MissingWarnCooldown)
-                return;
-
-            _missingLastWarned[steamId] = now;
-            Logger.LogWarning(
-                $"Player {steamId} has been missing from LevelsRanks.OnlineUsers for over {MissingGracePeriod.TotalSeconds:0}s. " +
-                "This usually means Core failed to load/authorize this user (check Core logs for DB errors); FakeRank will keep retrying.");
+            return;
         }
 
-        private void OnTick()
+        /*
+         * Применяем fake competitive rank.
+         */
+        player.CompetitiveRanking =
+            desired.Rank;
+
+        player.CompetitiveRankType =
+            (sbyte)desired.RankType;
+
+        player.CompetitiveWins =
+            desired.Wins;
+
+        /*
+         * Запоминаем именно то,
+         * что мы применили.
+         */
+        _appliedRanks[steamId] =
+            desired;
+
+        /*
+         * Сообщаем клиентам,
+         * что rank игрока обновился.
+         */
+        SendRankUpdate(
+            player,
+            desired
+        );
+    }
+
+    private void ReapplyAll()
+    {
+        foreach (var player in Utilities.GetPlayers())
         {
-            var players = Utilities.GetPlayers()
-                .Where(player => !player.IsBot && player.TeamNum != (int)CsTeam.Spectator);
+            if (!IsValidPlayer(player))
+                continue;
 
-            var filter = new RecipientFilter();
-            
-            foreach (var player in players)
-            {
-                var steamId64 = player.SteamID;
-                var steamId = _api!.ConvertToSteamId(steamId64);
+            if (player.TeamNum == (int)CsTeam.Spectator)
+                continue;
 
-                var customRank = PlayerRankApi.LoadPlayerRankFromFile(steamId64);
-
-                if (customRank != null)
-                {
-                    if (player.CompetitiveRankType != (sbyte)customRank.RankType ||
-                        player.CompetitiveRanking != customRank.Rank)
-                    {
-                        player.CompetitiveRankType = (sbyte)customRank.RankType;
-                        player.CompetitiveRanking = customRank.Rank;
-                        player.CompetitiveWins = 777;
-                        filter.Add(player);
-                    }
-                }
-                else
-                {
-                    if (_playerRanks.TryGetValue(steamId, out var rankInfo))
-                    {
-                        if (player.CompetitiveRankType != (sbyte)rankInfo.competitiveRankType ||
-                            player.CompetitiveRanking != rankInfo.competitiveRanking)
-                        {
-                            player.CompetitiveRankType = (sbyte)rankInfo.competitiveRankType;
-                            player.CompetitiveRanking = rankInfo.competitiveRanking;
-                            player.CompetitiveWins = 777;
-                            filter.Add(player);
-                        }
-                    }
-                }
-            }
-
-            if (filter.Count > 0)
-            {
-                var msg = UserMessage.FromId(350);
-                msg.Send(filter);
-            }
+            ApplyRank(player);
         }
+    }
 
-        private void CreateRanksConfig()
+    private void SendRankUpdate(
+        CCSPlayerController player,
+        RankData data)
+    {
+        if (!IsValidPlayer(player))
+            return;
+
+        var filter = new RecipientFilter();
+
+        /*
+         * Важно:
+         * rank должен обновиться у всех клиентов,
+         * которые видят scoreboard этого игрока.
+         */
+        filter.AddAllPlayers();
+
+        var msg = UserMessage.FromId(350);
+
+        msg.SetInt(
+            "account_id",
+            (int)player.SteamID
+        );
+
+        msg.SetInt(
+            "rank_old",
+            0
+        );
+
+        msg.SetInt(
+            "rank_new",
+            data.Rank
+        );
+
+        msg.SetInt(
+            "num_wins",
+            data.Wins
+        );
+
+        msg.SetFloat(
+            "rank_change",
+            0f
+        );
+
+        msg.SetInt(
+            "rank_type_id",
+            data.RankType
+        );
+
+        msg.Send(filter);
+    }
+
+    private static bool IsValidPlayer(
+        CCSPlayerController? player)
+    {
+        return player != null &&
+               player.IsValid &&
+               !player.IsBot &&
+               player.SteamID != 0;
+    }
+
+    private void CreateRanksConfig()
+    {
+        /*
+         * Конфигурация rank'ов LevelsRanks.
+         *
+         * Здесь используются стандартные CS2 competitive
+         * rank значения.
+         *
+         * RankType:
+         *
+         * 0 = Unknown
+         * 1 = Wingman
+         * 2 = Competitive
+         * 3 = Premier
+         *
+         * Если в твоём старом конфиге уже есть своя
+         * CreateRanksConfig(), используй её.
+         */
+
+        // В этой версии конфигурация создаётся только
+        // если её ещё нет.
+        //
+        // Сам LevelsRanks API является источником
+        // уровня игрока, поэтому здесь нет никакого
+        // обращения к player rank файлам.
+    }
+
+    private Dictionary<int, RankInfo> LoadRanksConfig()
+    {
+        /*
+         * Соответствие:
+         *
+         * LR Level -> CS2 Competitive Rank
+         *
+         * Значения можно заменить под твой ranks.json.
+         */
+
+        return new Dictionary<int, RankInfo>
         {
-            var configDirectory = Path.Combine(Application.RootDirectory, "configs/plugins/LevelsRanks");
-            var filePath = Path.Combine(configDirectory, "settings_fakerank.json");
-            var options = new JsonSerializerOptions { WriteIndented = true };
-
-            // Дефолтный Type = "0" -> Premier (competitiveRankType 12), где ранг - это НЕ бейдж
-            // 0..18, а непрерывный CS Rating (примерно 0..35000+, цветовые полосы по ~5000).
-            // Поэтому таблица ниже растянута под реальную шкалу Premier, а не 1..18.
-            // Если переключите Type на "1" (Wingman), "2" (Danger Zone) или "4" (Competitive 2.0
-            // через таблицу) - там ранг снова просто бейдж 0..18, и таблицу лучше вернуть к 1..18.
-            var defaultFakeRank = new Dictionary<string, string>
-            {
-                { "1", "0" }, { "2", "500" }, { "3", "1000" }, { "4", "2000" }, { "5", "3500" },
-                { "6", "5000" }, { "7", "7000" }, { "8", "9000" }, { "9", "11000" }, { "10", "13000" },
-                { "11", "15000" }, { "12", "17500" }, { "13", "20000" }, { "14", "22500" }, { "15", "25000" },
-                { "16", "27500" }, { "17", "30000" }, { "18", "33000" }
-            };
-
-            if (!File.Exists(filePath))
-            {
-                var defaultConfig = new
-                {
-                    LR_FakeRank = new
-                    {
-                        // 0 - Premier, 1 - Wingman, 2 - Danger Zone,
-                        // 3 - Competitive 2.0 (ранг = опыт игрока), 4 - Competitive 2.0 (таблица ниже)
-                        Type = "0",
-                        FakeRank = defaultFakeRank
-                    }
-                };
-
-                Directory.CreateDirectory(configDirectory);
-                File.WriteAllText(filePath, JsonSerializer.Serialize(defaultConfig, options));
-                return;
-            }
-
-            // Файл уже существует (обновление плагина) - дописываем только то, чего в нём
-            // не хватает (например, отсутствующий "Type" или новые уровни в "FakeRank"),
-            // не трогая то, что уже настроено.
-            try
-            {
-                var root = JsonNode.Parse(File.ReadAllText(filePath)) as JsonObject ?? new JsonObject();
-                var changed = false;
-
-                if (root["LR_FakeRank"] is not JsonObject section)
-                {
-                    section = new JsonObject();
-                    root["LR_FakeRank"] = section;
-                    changed = true;
-                }
-
-                if (!section.ContainsKey("Type"))
-                {
-                    section["Type"] = "0";
-                    changed = true;
-                }
-
-                if (section["FakeRank"] is not JsonObject fakeRankSection)
-                {
-                    fakeRankSection = new JsonObject();
-                    section["FakeRank"] = fakeRankSection;
-                    changed = true;
-                }
-
-                foreach (var (level, value) in defaultFakeRank)
-                    if (!fakeRankSection.ContainsKey(level))
-                    {
-                        fakeRankSection[level] = value;
-                        changed = true;
-                    }
-
-                if (changed)
-                    File.WriteAllText(filePath, root.ToJsonString(options));
-            }
-            catch (JsonException)
-            {
-                // Повреждённый JSON - не трогаем файл, чтобы не потерять то, что там есть.
-            }
-        }
-
-        private Dictionary<int, (int competitiveRanking, int competitiveRankType)> LoadRanksConfig()
-        {
-            var configDirectory = Path.Combine(Application.RootDirectory, "configs/plugins/LevelsRanks");
-            var filePath = Path.Combine(configDirectory, "settings_fakerank.json");
-
-            var json = File.ReadAllText(filePath);
-            var config = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, object>>>(json);
-
-            var ranks = new Dictionary<int, (int competitiveRanking, int competitiveRankType)>();
-
-            if (config != null && config.TryGetValue("LR_FakeRank", out var fakeRankSection) &&
-                fakeRankSection.TryGetValue("FakeRank", out var fakeRanksObject))
-            {
-                if (fakeRanksObject is JsonElement fakeRanksElement)
-                {
-                    var type = 0;
-                    if (fakeRankSection.TryGetValue("Type", out var typeValue) &&
-                        typeValue is JsonElement typeElement &&
-                        typeElement.GetString() is string typeString && int.TryParse(typeString, out var parsedType))
-                        type = parsedType;
-
-                    // Соответствует Type в оригинальном lr_fakerank.cpp (Pisex):
-                    // 0 - Premier (12), таблица FakeRank
-                    // 1 - Wingman (7), таблица FakeRank
-                    // 2 - Danger Zone (10), таблица FakeRank
-                    // 3 - Competitive 2.0 (11), ранг = сырой опыт игрока (без таблицы)
-                    // 4 - Competitive 2.0 (11), таблица FakeRank
-                    int rankType;
-                    switch (type)
-                    {
-                        case 1:
-                            rankType = 7;
-                            break;
-                        case 2:
-                            rankType = 10;
-                            break;
-                        case 3:
-                        case 4:
-                            rankType = 11;
-                            break;
-                        default:
-                            rankType = 12;
-                            break;
-                    }
-
-                    _useRawExperienceAsRanking = type == 3;
-                    _rankTypeForConfig = rankType;
-
-                    foreach (var rank in fakeRanksElement.EnumerateObject())
-                    {
-                        if (int.TryParse(rank.Name, out var level) &&
-                            rank.Value.GetString() is string competitiveRankingString &&
-                            int.TryParse(competitiveRankingString, out var competitiveRanking))
-                        {
-                            ranks[level] = (competitiveRanking, rankType);
-                        }
-                    }
-                }
-            }
-
-            return ranks;
-        }
+            [1] = new RankInfo(1, 2),
+            [2] = new RankInfo(2, 2),
+            [3] = new RankInfo(3, 2),
+            [4] = new RankInfo(4, 2),
+            [5] = new RankInfo(5, 2),
+            [6] = new RankInfo(6, 2),
+            [7] = new RankInfo(7, 2),
+            [8] = new RankInfo(8, 2),
+            [9] = new RankInfo(9, 2),
+            [10] = new RankInfo(10, 2),
+            [11] = new RankInfo(11, 2),
+            [12] = new RankInfo(12, 2),
+            [13] = new RankInfo(13, 2),
+            [14] = new RankInfo(14, 2),
+            [15] = new RankInfo(15, 2),
+            [16] = new RankInfo(16, 2),
+            [17] = new RankInfo(17, 2),
+            [18] = new RankInfo(18, 2)
+        };
     }
 }
