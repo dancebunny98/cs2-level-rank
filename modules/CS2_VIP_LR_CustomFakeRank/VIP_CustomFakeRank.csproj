@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>$(TargetFrameworkVersion)</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -11,8 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.376" />
-    <PackageReference Include="Microsoft.Extensions.Localization" Version="8.0.0" />
+    <PackageReference Include="CounterStrikeSharp.API" Version="$(CounterStrikeSharpVersion)" />
+    <PackageReference Include="Microsoft.Extensions.Localization" Version="$(MicrosoftExtensionsVersion)" />
 
     <!-- Собственный интерфейс IPlayerRankApi модуля FakeRank - разделяемый контракт,
          резолвится через addons/counterstrikesharp/shared/FakeRanksApi/, поэтому

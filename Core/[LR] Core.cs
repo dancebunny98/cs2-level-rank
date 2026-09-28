@@ -25,7 +25,7 @@ public class LevelsRanks : BasePlugin
 {
     public override string ModuleName => "[LevelsRanks] Core";
 	public override string ModuleAuthor => "ABKAM designed by RoadSide Romeo & Wend4r";
-    public override string ModuleVersion => "v1.1.4";
+    public override string ModuleVersion => $"v{typeof(LevelsRanks).Assembly.GetName().Version?.ToString(3) ?? "1.2.0"}";
     public DatabaseConnection DatabaseConnection { get; set; } = null!;
     public Database Database { get; set; } = null!;
     public string? DbConnectionString = string.Empty;
@@ -107,7 +107,9 @@ public class LevelsRanks : BasePlugin
         _rankapi = new LevelsRanksApi(this, levelsRanksApiLogger);
         Capabilities.RegisterPluginCapability(_rankpluginCapability, () => _rankapi);
 
-        Task.Run(() => Database.CreateTable());
+        // Инициализация БД не блокирует загрузку игровых обработчиков и сама
+        // продолжает попытки до восстановления MySQL.
+        _ = Database.StartHealthCheckAsync();
 
 
         // lr_db_savedataplayer_mode = "1" (по умолчанию): батчим сохранение каждые 5 секунд,
@@ -132,6 +134,7 @@ public class LevelsRanks : BasePlugin
         {
             Task.Run(async () =>
             {
+                await Database.IsConnectionHealthyAsync();
                 foreach (var user in OnlineUsers.Values)
                 {
                     await Database.UpdateUsersInDbWithRetry(new List<User> { user });
@@ -1143,7 +1146,6 @@ public class LevelsRanks : BasePlugin
         });
     }
 
-
     [ConsoleCommand("css_lvl", "Открыть меню Levels Ranks")]
     public void OpenLevelsRanksMenu(CCSPlayerController? player, CommandInfo command)
     {
@@ -1168,7 +1170,7 @@ public class LevelsRanks : BasePlugin
                 return;
             }
 
-            var menu = _api.NewMenu(PluginTitle);
+            var menu = _api.NewMenuForcetype(PluginTitle, MenuType.CenterMenu, null);
 
             if (AdminManager.PlayerHasPermissions(player, AdminMenuFlag))
                 menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["admin_panel"]),
@@ -1192,7 +1194,7 @@ public class LevelsRanks : BasePlugin
 
     private void OpenAllRanksMenu(CCSPlayerController player)
     {
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["all_ranks"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["all_ranks"]), MenuType.CenterMenu, null);
 
         foreach (var rank in RanksSettings.Ranks.OrderBy(r => r.Key))
         {
@@ -1207,7 +1209,7 @@ public class LevelsRanks : BasePlugin
 
     private void OpenTopPlayersMenu(CCSPlayerController player)
     {
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["top_players"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["top_players"]), MenuType.CenterMenu, null);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["top_10_experience"]),
             (p, option) => ShowTopPlayersByExperience(p));
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["top_10_activity"]),
@@ -1218,7 +1220,7 @@ public class LevelsRanks : BasePlugin
     private async void ShowTopPlayersByExperience(CCSPlayerController player)
     {
         var topPlayers = await Database.GetTopPlayersByExperience(TopCount);
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["top_10_experience"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["top_10_experience"]), MenuType.CenterMenu, null);
 
         for (var i = 0; i < topPlayers.Count; i++)
         {
@@ -1248,7 +1250,7 @@ public class LevelsRanks : BasePlugin
     private async void ShowTopPlayersByPlaytime(CCSPlayerController player)
     {
         var topPlayers = await Database.GetTopPlayersByPlaytime(TopCount);
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["top_10_activity"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["top_10_activity"]), MenuType.CenterMenu, null);
 
         for (var i = 0; i < topPlayers.Count; i++)
         {
@@ -1268,7 +1270,7 @@ public class LevelsRanks : BasePlugin
 
     private void OpenUserStatsMenu(CCSPlayerController player, User user)
     {
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["my_stats"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["my_stats"]), MenuType.CenterMenu, null);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["show_stats_in_chat"]),
             (p, option) => ShowUserStats(p, user));
         if (_showResetMyStats)
@@ -1369,7 +1371,7 @@ public class LevelsRanks : BasePlugin
 
     private void OpenAdminPanel(CCSPlayerController player)
     {
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["admin_panel"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["admin_panel"]), MenuType.CenterMenu, null);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["grant_revoke_points"]),
             (p, option) => OpenGrantRevokeMenu(p));
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["reload_plugin_settings"]),
@@ -1389,7 +1391,7 @@ public class LevelsRanks : BasePlugin
 
     private void OpenGrantRevokeMenu(CCSPlayerController player)
     {
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["grant_revoke_points"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["grant_revoke_points"]), MenuType.CenterMenu, null);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["grant_points"]),
             (p, option) => OpenPlayerSelectionMenu(p, true));
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["revoke_points"]),
@@ -1399,7 +1401,7 @@ public class LevelsRanks : BasePlugin
 
     private void OpenPlayerSelectionMenu(CCSPlayerController player, bool isGrant)
     {
-        var menu = _api?.NewMenu(ReplaceColorPlaceholders(Localizer["select_player"]));
+        var menu = _api?.NewMenuForcetype(ReplaceColorPlaceholders(Localizer["select_player"]), MenuType.CenterMenu, null);
         var players = Utilities.GetPlayers().Where(p => p.IsValid && !p.IsBot).ToList();
 
         foreach (var targetPlayer in players)
@@ -1411,9 +1413,9 @@ public class LevelsRanks : BasePlugin
 
     private void OpenAmountSelectionMenu(CCSPlayerController player, CCSPlayerController targetPlayer, bool isGrant)
     {
-        var menu = _api?.NewMenu(isGrant
+        var menu = _api?.NewMenuForcetype(isGrant
             ? ReplaceColorPlaceholders(Localizer["grant_points"])
-            : ReplaceColorPlaceholders(Localizer["revoke_points"]));
+            : ReplaceColorPlaceholders(Localizer["revoke_points"]), MenuType.CenterMenu, null);
         var amounts = new[] { 10, 50, 100, 500 };
 
         foreach (var amount in amounts)
