@@ -18,7 +18,6 @@ public class Database
     private readonly LevelsRanks _plugin;
     private readonly CancellationTokenSource _healthCancellation = new();
     private readonly SemaphoreSlim _connectionGate = new(1, 1);
-    private int _lastHealthLogMinute = -1;
 
     public Database(LevelsRanks plugin, string? connectionString, string? tableName, string? serverId,
         ILogger<Database> logger)
@@ -563,7 +562,7 @@ public class Database
         }
     }
 
-    private async Task OpenConnectionWithRetryAsync(MySqlConnection connection, int maxAttempts = 5)
+    private static async Task OpenConnectionWithRetryAsync(MySqlConnection connection, int maxAttempts = 5)
     {
         Exception? lastError = null;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
