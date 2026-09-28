@@ -1,18 +1,20 @@
-using System.Collections.Generic;
-using System.IO;
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using CounterStrikeSharp.API.Core;
-using Microsoft.Extensions.Logging;
 
 public class PlayerRankApi : IPlayerRankApi
 {
-    private static LevelsRanksModuleFakeRank.LevelsRanksModuleFakeRank _core;
+    private static LevelsRanksModuleFakeRank.LevelsRanksModuleFakeRank _core = null!;
     private readonly Dictionary<ulong, (int originalRank, int originalRankType)> _originalRanks = new();
+
+    // Кэш кастомных рангов в памяти. null-значение = "файла нет" (тоже кэшируем,
+    // чтобы OnTick не ходил на диск каждый тик). Диск читается один раз на игрока.
+    private static readonly ConcurrentDictionary<ulong, PlayerRankData?> _customCache = new();
 
     // Идентификатор сервера (LevelsRanks Core -> settings.json -> lr_server_id).
     // Кастомные ранги хранятся в файлах на диске (не в БД), поэтому если несколько
-    // серверов делят один и тот же каталог плагина, их нужно различать по подпапке,
-    // иначе ручной ранг, выставленный на одном сервере, "утечёт" на другой.
+    // серверов делят один и тот же каталог плагина, их нужно различать по подпапке.
     public static string ServerId { get; set; } = "default";
 
     public PlayerRankApi(LevelsRanksModuleFakeRank.LevelsRanksModuleFakeRank core)
@@ -40,62 +42,98 @@ public class PlayerRankApi : IPlayerRankApi
             _originalRanks[steamId] = (player.CompetitiveRanking, player.CompetitiveRankType);
         }
 
+        var data = new PlayerRankData { Rank = rank, RankType = rankType };
+
+        // Сначала кэш - OnTick подхватит новый ранг уже на следующем тике.
+        _customCache[steamId] = data;
+
         player.CompetitiveRanking = rank;
         player.CompetitiveRankType = (sbyte)rankType;
 
-        SavePlayerRankToFile(steamId, rank, rankType); 
+        SavePlayerRankToFile(steamId, data);
     }
 
     public void ResetRank(CCSPlayerController player)
     {
         var steamId = player.SteamID;
+
         if (_originalRanks.TryGetValue(steamId, out var originalRank))
         {
             player.CompetitiveRanking = originalRank.originalRank;
             player.CompetitiveRankType = (sbyte)originalRank.originalRankType;
-
-            _originalRanks.Remove(steamId); 
-            DeletePlayerRankFile(steamId); 
+            _originalRanks.Remove(steamId);
         }
+
+        // Кастомный ранг снимаем всегда (даже после перезагрузки плагина, когда
+        // _originalRanks пуст) - иначе файл остаётся и ранг "залипает".
+        _customCache[steamId] = null;
+        DeletePlayerRankFile(steamId);
     }
 
-    private void SavePlayerRankToFile(ulong steamId, int rank, int rankType)
+    /// <summary>Кэшированный кастомный ранг; при первом обращении читает файл один раз.</summary>
+    public static bool TryGetCustomRank(ulong steamId, [NotNullWhen(true)] out PlayerRankData? data)
     {
-        var filePath = GetPlayerRankFilePath(steamId);
-        var rankData = new PlayerRankData { Rank = rank, RankType = rankType };
-        var json = JsonSerializer.Serialize(rankData);
-        File.WriteAllText(filePath, json);
+        if (!_customCache.TryGetValue(steamId, out data))
+        {
+            data = LoadPlayerRankFromFile(steamId);
+            _customCache[steamId] = data;
+        }
+
+        return data != null;
+    }
+
+    /// <summary>Сбросить кэш игрока (при выходе), файл не трогаем.</summary>
+    public static void Forget(ulong steamId) => _customCache.TryRemove(steamId, out _);
+
+    private static void SavePlayerRankToFile(ulong steamId, PlayerRankData data)
+    {
+        try
+        {
+            File.WriteAllText(GetPlayerRankFilePath(steamId), JsonSerializer.Serialize(data));
+        }
+        catch (Exception)
+        {
+            // ранг остаётся в кэше на время сессии, даже если диск недоступен
+        }
     }
 
     public static PlayerRankData? LoadPlayerRankFromFile(ulong steamId)
     {
-        var filePath = GetPlayerRankFilePath(steamId);
-        if (File.Exists(filePath))
+        try
         {
-            var json = File.ReadAllText(filePath);
-            var rankData = JsonSerializer.Deserialize<PlayerRankData>(json);
-            return rankData;
-        }
+            var filePath = GetPlayerRankFilePath(steamId);
+            if (!File.Exists(filePath))
+                return null;
 
-        return null;
+            return JsonSerializer.Deserialize<PlayerRankData>(File.ReadAllText(filePath));
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
-    private void DeletePlayerRankFile(ulong steamId)
+    private static void DeletePlayerRankFile(ulong steamId)
     {
-        var filePath = GetPlayerRankFilePath(steamId);
-        if (File.Exists(filePath))
+        try
         {
-            File.Delete(filePath);
+            var filePath = GetPlayerRankFilePath(steamId);
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+        catch (Exception)
+        {
         }
     }
 
     private static string GetPlayerRankFilePath(ulong steamId)
     {
-        var dataDirectory = Path.Combine(_core.ModuleDirectory, "PlayerData", ServerId);
-        if (!Directory.Exists(dataDirectory))
-        {
-            Directory.CreateDirectory(dataDirectory);
-        }
+        var safeServerId = string.Concat(ServerId.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        if (string.IsNullOrWhiteSpace(safeServerId))
+            safeServerId = "default";
+
+        var dataDirectory = Path.Combine(_core.ModuleDirectory, "PlayerData", safeServerId);
+        Directory.CreateDirectory(dataDirectory);
 
         return Path.Combine(dataDirectory, $"{steamId}_rank.json");
     }
