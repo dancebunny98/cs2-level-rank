@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <!-- Единственный источник версий для всех проектов и CI. -->
+    <PluginVersion Condition="'$(PluginVersion)' == ''">1.2.0</PluginVersion>
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
+    <CounterStrikeSharpVersion Condition="'$(CounterStrikeSharpVersion)' == ''">1.0.376</CounterStrikeSharpVersion>
+    <MySqlConnectorVersion Condition="'$(MySqlConnectorVersion)' == ''">2.6.2</MySqlConnectorVersion>
+    <DapperVersion Condition="'$(DapperVersion)' == ''">2.1.24</DapperVersion>
+    <MicrosoftExtensionsVersion Condition="'$(MicrosoftExtensionsVersion)' == ''">10.0.0</MicrosoftExtensionsVersion>
+    <TargetFrameworkVersion Condition="'$(TargetFrameworkVersion)' == ''">net10.0</TargetFrameworkVersion>
+    <Version>$(PluginVersion).$(BuildNumber)</Version>
+    <AssemblyVersion>$(PluginVersion).0</AssemblyVersion>
+    <FileVersion>$(PluginVersion).$(BuildNumber)</FileVersion>
+    <InformationalVersion>$(PluginVersion)+build.$(BuildNumber)</InformationalVersion>
+  </PropertyGroup>
+</Project>

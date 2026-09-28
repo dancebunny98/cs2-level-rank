@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>$(TargetFrameworkVersion)</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -20,9 +20,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.376" />
-    <PackageReference Include="Dapper" Version="2.1.24" />
-    <PackageReference Include="MySqlConnector" Version="2.6.2" />
+    <PackageReference Include="CounterStrikeSharp.API" Version="$(CounterStrikeSharpVersion)" />
+    <PackageReference Include="Dapper" Version="$(DapperVersion)" />
+    <PackageReference Include="MySqlConnector" Version="$(MySqlConnectorVersion)" />
 
     <!-- Private=false у обоих: и LevelsRanksApi, и FakeRanksApi - это разделяемые
          контракты (addons/counterstrikesharp/shared/...), их не нужно копировать

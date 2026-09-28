@@ -12,6 +12,7 @@ env:
   DOTNET_VERSION: "10.0.x"
   CONFIGURATION: Release
   STAGE: dist/addons/counterstrikesharp
+  BUILD_NUMBER: ${{ github.run_number }}
 
 jobs:
   build:
@@ -26,15 +27,23 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Read build metadata
+        id: metadata
+        shell: bash
+        run: |
+          version=$(sed -n 's/.*<PluginVersion[^>]*>\([^<]*\)<\/PluginVersion>.*/\1/p' Directory.Build.props)
+          test -n "$version"
+          echo "plugin_version=$version" >> "$GITHUB_OUTPUT"
+
       # LevelsRanksApi (контракт) + LVL Core (реализация) + все не-VIP модули.
       # Собираем решение целиком один раз - если где-то реальная ошибка
       # компиляции C#, она вся будет видна тут одним списком, а не по частям
       # в отдельных publish-шагах ниже.
       - name: Restore
-        run: dotnet restore "LevelsRanks.sln"
+        run: dotnet restore "LevelsRanks.sln" -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }}
 
       - name: Build Core + modules
-        run: dotnet build "LevelsRanks.sln" -c ${{ env.CONFIGURATION }} --no-restore
+        run: dotnet build "LevelsRanks.sln" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }}
 
       - name: Check for VipCoreApi.dll
         id: vipcore
@@ -66,20 +75,20 @@ jobs:
       - name: Publish shared contracts
         run: |
           set -e
-          dotnet publish "Api/LevelsRanksApi.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/shared/LevelsRanksApi"
-          dotnet publish "modules/CS2-LR-FakeRank/FakeRanksApi.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/shared/FakeRanksApi"
+          dotnet publish "Api/LevelsRanksApi.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/shared/LevelsRanksApi"
+          dotnet publish "modules/CS2-LR-FakeRank/FakeRanksApi.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/shared/FakeRanksApi"
 
       - name: Publish Core
-        run: dotnet publish "Core/LVL Core.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LevelsRanksCore"
+        run: dotnet publish "Core/LVL Core.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LevelsRanksCore"
 
       - name: Publish modules
         run: |
           set -e
-          dotnet publish "modules/CS2-LR-FakeRank/[LR] Module - FakeRank.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_FakeRank"
-          dotnet publish "modules/CS2-LR-ExStats-Hits/[LR] Module - ExStats Hits.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_ExStatsHits"
-          dotnet publish "modules/CS2-LR-ExStats-Weapons/[LR] Module - ExStats Weapons.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_ExStatsWeapons"
-          dotnet publish "modules/CS2-LR-Module-Tag/[LR] Module - Tag.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_Tag"
-          dotnet publish "modules/CS2-LR-UnusualKills/[LR] Module - UnusualKills.csproj" -c ${{ env.CONFIGURATION }} --no-restore -o "$STAGE/plugins/LR_Module_UnusualKills"
+          dotnet publish "modules/CS2-LR-FakeRank/[LR] Module - FakeRank.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_Module_FakeRank"
+          dotnet publish "modules/CS2-LR-ExStats-Hits/[LR] Module - ExStats Hits.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_Module_ExStatsHits"
+          dotnet publish "modules/CS2-LR-ExStats-Weapons/[LR] Module - ExStats Weapons.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_Module_ExStatsWeapons"
+          dotnet publish "modules/CS2-LR-Module-Tag/[LR] Module - Tag.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_Module_Tag"
+          dotnet publish "modules/CS2-LR-UnusualKills/[LR] Module - UnusualKills.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_Module_UnusualKills"
 
       # VIP-модули зависят от стороннего VipCoreApi.dll, который не хранится в
       # репозитории (см. libs/README.md). Публикуем их отдельно и не роняем
@@ -88,13 +97,13 @@ jobs:
         if: steps.vipcore.outputs.present == 'true'
         run: |
           set -e
-          dotnet publish "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }} -o "$STAGE/plugins/LR_VIP_ExperienceMultiplier"
-          dotnet publish "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }} -o "$STAGE/plugins/LR_VIP_CustomFakeRank"
+          dotnet publish "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }} -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_VIP_ExperienceMultiplier"
+          dotnet publish "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }} -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_VIP_CustomFakeRank"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LevelsRanks-${{ github.sha }}
+          name: LevelsRanks-${{ steps.metadata.outputs.plugin_version }}+build.${{ env.BUILD_NUMBER }}
           path: dist/**
           if-no-files-found: error
 
