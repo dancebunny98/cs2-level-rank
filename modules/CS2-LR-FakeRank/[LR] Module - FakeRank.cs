@@ -3,6 +3,7 @@ using System.Text.Json;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes;
+using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Timers;
@@ -19,7 +20,7 @@ namespace LevelsRanksModuleFakeRank
     public class LevelsRanksModuleFakeRank : BasePlugin
     {
         public override string ModuleName => "[LR] Module - FakeRank";
-        public override string ModuleVersion => "1.0.10";
+        public override string ModuleVersion => "1.0.11";
         public override string ModuleAuthor => "ABKAM designed by RoadSide Romeo & Wend4r";
 
         private ILevelsRanksApi? _api;
