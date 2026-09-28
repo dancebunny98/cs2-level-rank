@@ -12,5 +12,9 @@
     <AssemblyVersion>$(PluginVersion).0</AssemblyVersion>
     <FileVersion>$(PluginVersion).$(BuildNumber)</FileVersion>
     <InformationalVersion>$(PluginVersion)+build.$(BuildNumber)</InformationalVersion>
+    <!-- В проекте включена nullable-аннотация, но существующие модули используют
+         динамические игровые данные. Эти диагностические сообщения не являются
+         ошибками сборки и не должны заглушать реальные ошибки. -->
+    <NoWarn>$(NoWarn);CS0168;CS8601;CS8602;CS8603;CS8618</NoWarn>
   </PropertyGroup>
 </Project>
