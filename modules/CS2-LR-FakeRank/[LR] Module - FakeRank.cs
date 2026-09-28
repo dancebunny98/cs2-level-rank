@@ -20,7 +20,7 @@ namespace LevelsRanksModuleFakeRank
     public class LevelsRanksModuleFakeRank : BasePlugin
     {
         public override string ModuleName => "[LR] Module - FakeRank";
-        public override string ModuleVersion => "1.0.11";
+        public override string ModuleVersion => "1.0.13";
         public override string ModuleAuthor => "ABKAM designed by RoadSide Romeo & Wend4r";
 
         private ILevelsRanksApi? _api;
@@ -54,6 +54,7 @@ namespace LevelsRanksModuleFakeRank
         private string _lastEventName = "none";
         private long _lastEventMs;
         private long _statsSinceMs = Environment.TickCount64;
+        private long _winsMismatch;
 
         public override void Load(bool hotReload)
         {
@@ -93,6 +94,13 @@ namespace LevelsRanksModuleFakeRank
             // Движок CS2 сам перезаписывает CompetitiveRanking/Type (спавн, раунд,
             // смена команды...), поэтому "применить один раз" даёт моргание.
             RegisterListener<Listeners.OnTick>(OnTick);
+
+            // Кто-то (по данным css_fakerank_debug - ~10 раз/сек у всех игроков) обнуляет
+            // rank/wins ПОСЛЕ OnTick, но до отправки состояния клиентам. CheckTransmit -
+            // самый поздний момент перед отправкой: ставим ранг ещё раз, чтобы клиенты
+            // никогда не получали нули. Сам CheckTransmit вызывается на каждого клиента,
+            // поэтому работаем не чаще одного раза за тик.
+            RegisterListener<Listeners.CheckTransmit>(_ => OnCheckTransmit());
 
         }
 
@@ -159,7 +167,21 @@ namespace LevelsRanksModuleFakeRank
             return false;
         }
 
-        private void OnTick()
+        private int _lastTransmitTick = -1;
+
+        private void OnTick() => EnforceRanks(sendMessage: true, source: "tick");
+
+        private void OnCheckTransmit()
+        {
+            var tick = Server.TickCount;
+            if (tick == _lastTransmitTick)
+                return;
+
+            _lastTransmitTick = tick;
+            EnforceRanks(sendMessage: false, source: "transmit");
+        }
+
+        private void EnforceRanks(bool sendMessage, string source)
         {
             RecipientFilter? filter = null;
             var now = Environment.TickCount64;
@@ -177,21 +199,29 @@ namespace LevelsRanksModuleFakeRank
                 if (!TryGetDesiredRank(steamId64, out var rank, out var rankType))
                     continue;
 
-                // Пишем в контроллер только если значение реально отличается.
-                // Wins тоже проверяем: если движок сбросит его, Premier на табло пропадает.
-                if (player.CompetitiveRankType != (sbyte)rankType ||
-                    player.CompetitiveRanking != rank ||
-                    player.CompetitiveWins != 777)
+                // Пишем в контроллер только если ранг/тип реально отличаются - как в оригинале.
+                // Wins в условие НЕ входит: если игра хранит его иначе, чем мы пишем,
+                // перезапись и сообщение 350 шли бы каждый тик у каждого игрока.
+                if (player.CompetitiveRankType == (sbyte)rankType &&
+                    player.CompetitiveRanking == rank)
+                {
+                    if (player.CompetitiveWins != 777)
+                        _winsMismatch++; // только счётчик для css_fakerank_debug
+                }
+                else
                 {
                     // Что было ДО нашей перезаписи - показывает, кто менял ранг.
-                    RecordRewrite(steamId64, player.CompetitiveRanking, player.CompetitiveRankType, player.CompetitiveWins, now);
+                    RecordRewrite(steamId64, player.CompetitiveRanking, player.CompetitiveRankType, player.CompetitiveWins, now, source);
 
                     player.CompetitiveRankType = (sbyte)rankType;
                     player.CompetitiveRanking = rank;
                     player.CompetitiveWins = 777;
 
-                    filter ??= new RecipientFilter();
-                    filter.Add(player);
+                    if (sendMessage)
+                    {
+                        filter ??= new RecipientFilter();
+                        filter.Add(player);
+                    }
                 }
             }
 
@@ -209,12 +239,12 @@ namespace LevelsRanksModuleFakeRank
             return HookResult.Continue;
         }
 
-        private void RecordRewrite(ulong steamId64, int oldRank, int oldType, int oldWins, long now)
+        private void RecordRewrite(ulong steamId64, int oldRank, int oldType, int oldWins, long now, string source)
         {
             _rewrites.AddOrUpdate(steamId64, 1, (_, v) => v + 1);
             _lastForeign[steamId64] = (oldRank, oldType, oldWins);
 
-            var bucket = now - _lastEventMs < 500 ? "after_" + _lastEventName : "steady(no event)";
+            var bucket = source + ": " + (now - _lastEventMs < 500 ? "after_" + _lastEventName : "steady(no event)");
             _rewriteBuckets.AddOrUpdate(bucket, 1, (_, v) => v + 1);
         }
 
@@ -227,6 +257,8 @@ namespace LevelsRanksModuleFakeRank
 
             var seconds = Math.Max(1, (Environment.TickCount64 - _statsSinceMs) / 1000.0);
             info.ReplyToCommand($"[FakeRank] v{ModuleVersion}, period {seconds:F0}s, RawXP mode={_useRawExperienceAsRanking}, type={_rankTypeForConfig}");
+
+            info.ReplyToCommand($"  ticks where rank OK but wins != 777: {_winsMismatch}");
 
             foreach (var kv in _rewriteBuckets)
                 info.ReplyToCommand($"  rewrites {kv.Key}: {kv.Value}");
@@ -245,6 +277,7 @@ namespace LevelsRanksModuleFakeRank
 
             _rewrites.Clear();
             _rewriteBuckets.Clear();
+            _winsMismatch = 0;
             _statsSinceMs = Environment.TickCount64;
         }
 
