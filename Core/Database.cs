@@ -16,6 +16,9 @@ public class Database
 
     private readonly ILogger<Database> _logger;
     private readonly LevelsRanks _plugin;
+    private readonly CancellationTokenSource _healthCancellation = new();
+    private readonly SemaphoreSlim _connectionGate = new(1, 1);
+    private int _lastHealthLogMinute = -1;
 
     public Database(LevelsRanks plugin, string? connectionString, string? tableName, string? serverId,
         ILogger<Database> logger)
@@ -34,7 +37,7 @@ public class Database
         try
         {
             await using var connection = new MySqlConnection(_connectionString);
-            await connection.OpenAsync();
+            await OpenConnectionWithRetryAsync(connection);
 
             var commandText = $"SELECT `steam`, `rank` FROM `{_tableName}` WHERE `server_id` = @serverId";
             await using var command = new MySqlCommand(commandText, connection);
@@ -60,20 +63,20 @@ public class Database
 
     public async Task UpdateUsersInDbWithRetry(IEnumerable<User> users)
     {
-        const int maxRetries = 3;
         var retryCount = 0;
-
-        while (retryCount < maxRetries)
+        while (true)
             try
             {
                 await UpdateUsersInDb(users);
                 return;
             }
-            catch (MySqlException ex) when (ex.Number == 1213)
+            catch (Exception ex)
             {
                 retryCount++;
-                if (retryCount == maxRetries) throw;
-                await Task.Delay(1000);
+                _logger.LogWarning("Could not save player data to MySQL (attempt {Attempt}). Retrying: {Message}",
+                    retryCount, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Min(30, Math.Max(1, retryCount))),
+                    _healthCancellation.Token);
             }
     }
 
@@ -82,7 +85,7 @@ public class Database
         var users = new List<User>();
 
         await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
 
         var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId";
         await using var command = new MySqlCommand(commandText, connection);
@@ -98,7 +101,7 @@ public class Database
     public async Task CreateTable()
     {
         await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
 
         // server_id входит в первичный ключ: одна и та же учётная запись (steam) может
         // иметь независимую строку статистики на каждом сервере, при этом сам игрок
@@ -170,7 +173,7 @@ public class Database
     public async Task<User?> GetUserFromDb(string steamId)
     {
         await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
 
         var commandText = $"SELECT * FROM `{_tableName}` WHERE `steam` = @steamId AND `server_id` = @serverId";
         await using var command = new MySqlCommand(commandText, connection);
@@ -186,31 +189,45 @@ public class Database
 
     public async Task AddUserToDb(User user)
     {
-        await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        while (true)
+        {
+            try
+            {
+                await using var connection = new MySqlConnection(_connectionString);
+                await OpenConnectionWithRetryAsync(connection);
 
-        var commandText = $@"
+                var commandText = $@"
                 INSERT INTO `{_tableName}` (`steam`, `server_id`, `name`, `value`, `rank`, `kills`, `deaths`, `shoots`, `hits`, `headshots`, `assists`, `round_win`, `round_lose`, `playtime`, `lastconnect`)
                 VALUES (@steam, @serverId, @name, @value, @rank, @kills, @deaths, @shoots, @hits, @headshots, @assists, @round_win, @round_lose, @playtime, @lastconnect);";
 
-        await using var command = new MySqlCommand(commandText, connection);
-        command.Parameters.AddWithValue("@steam", user.SteamId);
-        command.Parameters.AddWithValue("@serverId", _serverId);
-        command.Parameters.AddWithValue("@name", user.Name);
-        command.Parameters.AddWithValue("@value", user.Value);
-        command.Parameters.AddWithValue("@rank", user.Rank);
-        command.Parameters.AddWithValue("@kills", user.Kills);
-        command.Parameters.AddWithValue("@deaths", user.Deaths);
-        command.Parameters.AddWithValue("@shoots", user.Shoots);
-        command.Parameters.AddWithValue("@hits", user.Hits);
-        command.Parameters.AddWithValue("@headshots", user.Headshots);
-        command.Parameters.AddWithValue("@assists", user.Assists);
-        command.Parameters.AddWithValue("@round_win", user.RoundWin);
-        command.Parameters.AddWithValue("@round_lose", user.RoundLose);
-        command.Parameters.AddWithValue("@playtime", user.Playtime);
-        command.Parameters.AddWithValue("@lastconnect", user.LastConnect);
-
-        await command.ExecuteNonQueryAsync();
+                await using var command = new MySqlCommand(commandText, connection);
+                command.Parameters.AddWithValue("@steam", user.SteamId);
+                command.Parameters.AddWithValue("@serverId", _serverId);
+                command.Parameters.AddWithValue("@name", user.Name);
+                command.Parameters.AddWithValue("@value", user.Value);
+                command.Parameters.AddWithValue("@rank", user.Rank);
+                command.Parameters.AddWithValue("@kills", user.Kills);
+                command.Parameters.AddWithValue("@deaths", user.Deaths);
+                command.Parameters.AddWithValue("@shoots", user.Shoots);
+                command.Parameters.AddWithValue("@hits", user.Hits);
+                command.Parameters.AddWithValue("@headshots", user.Headshots);
+                command.Parameters.AddWithValue("@assists", user.Assists);
+                command.Parameters.AddWithValue("@round_win", user.RoundWin);
+                command.Parameters.AddWithValue("@round_lose", user.RoundLose);
+                command.Parameters.AddWithValue("@playtime", user.Playtime);
+                command.Parameters.AddWithValue("@lastconnect", user.LastConnect);
+                await command.ExecuteNonQueryAsync();
+                return;
+            }
+            catch (Exception ex)
+            {
+                if (ex is MySqlException { Number: 1062 })
+                    return;
+                _logger.LogWarning("Could not create player {SteamId} in MySQL. Retrying: {Message}",
+                    user.SteamId, ex.Message);
+                await Task.Delay(TimeSpan.FromSeconds(5), _healthCancellation.Token);
+            }
+        }
     }
 
     public async Task<int?> GetPlayerRankAsync(string steamId)
@@ -218,7 +235,7 @@ public class Database
         try
         {
             await using var connection = new MySqlConnection(_connectionString);
-            await connection.OpenAsync();
+            await OpenConnectionWithRetryAsync(connection);
 
             var commandText = $"SELECT `rank` FROM `{_tableName}` WHERE `steam` = @steamId AND `server_id` = @serverId";
             await using var command = new MySqlCommand(commandText, connection);
@@ -240,7 +257,7 @@ public class Database
         try
         {
             await using var connection = new MySqlConnection(_connectionString);
-            await connection.OpenAsync();
+            await OpenConnectionWithRetryAsync(connection);
 
             var commandText = $"UPDATE `{_tableName}` SET `rank` = @newRank WHERE `steam` = @steamId AND `server_id` = @serverId";
             await using var command = new MySqlCommand(commandText, connection);
@@ -261,7 +278,7 @@ public class Database
         if (!users.Any()) return;
 
         await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
 
         await using var transaction = await connection.BeginTransactionAsync();
 
@@ -322,7 +339,7 @@ public class Database
         try
         {
             using var connection = new MySqlConnection(_connectionString);
-            await connection.OpenAsync();
+            await OpenConnectionWithRetryAsync(connection);
 
             var query = $"SELECT * FROM `{_tableName}` WHERE `name` LIKE @Name AND `server_id` = @serverId LIMIT 1";
             using var command = new MySqlCommand(query, connection);
@@ -350,7 +367,7 @@ public class Database
         try
         {
             using var connection = new MySqlConnection(_connectionString);
-            await connection.OpenAsync();
+            await OpenConnectionWithRetryAsync(connection);
 
             var countQuery = $"SELECT COUNT(*) FROM `{_tableName}` WHERE `server_id` = @serverId";
             using var countCommand = new MySqlCommand(countQuery, connection);
@@ -381,7 +398,7 @@ public class Database
         var users = new List<User>();
 
         await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
 
         var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId AND `lastconnect` > 0 ORDER BY `value` DESC LIMIT @topN";
         await using var command = new MySqlCommand(commandText, connection);
@@ -400,7 +417,7 @@ public class Database
         var users = new List<User>();
 
         await using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
 
         var commandText = $"SELECT * FROM `{_tableName}` WHERE `server_id` = @serverId AND `lastconnect` > 0 ORDER BY `playtime` DESC LIMIT @topN";
         await using var command = new MySqlCommand(commandText, connection);
@@ -425,7 +442,7 @@ public class Database
         try
         {
             await using var connection = new MySqlConnection(_connectionString);
-            await connection.OpenAsync();
+            await OpenConnectionWithRetryAsync(connection);
 
             var cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - (long)days * 86400;
 
@@ -495,6 +512,76 @@ public class Database
             throw new InvalidOperationException("ConnectionString is not set.");
 
         using var connection = new MySqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await OpenConnectionWithRetryAsync(connection);
+    }
+
+    public Task StartHealthCheckAsync()
+    {
+        _ = Task.Run(HealthCheckLoopAsync);
+        return Task.CompletedTask;
+    }
+
+    public async Task<bool> IsConnectionHealthyAsync()
+    {
+        try
+        {
+            await using var connection = new MySqlConnection(_connectionString);
+            await OpenConnectionWithRetryAsync(connection, 1);
+            await using var command = new MySqlCommand("SELECT 1", connection);
+            await command.ExecuteScalarAsync();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("MySQL health check failed: {Message}", ex.Message);
+            return false;
+        }
+    }
+
+    private async Task HealthCheckLoopAsync()
+    {
+        while (!_healthCancellation.IsCancellationRequested)
+        {
+            try
+            {
+                await ConnectAsync();
+                await _connectionGate.WaitAsync(_healthCancellation.Token);
+                try { await CreateTable(); }
+                finally { _connectionGate.Release(); }
+                await Task.Delay(TimeSpan.FromSeconds(15), _healthCancellation.Token);
+            }
+            catch (OperationCanceledException) when (_healthCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("MySQL is unavailable. Retrying in 5 seconds: {Message}", ex.Message);
+                try { await Task.Delay(TimeSpan.FromSeconds(5), _healthCancellation.Token); }
+                catch (OperationCanceledException) { return; }
+            }
+        }
+    }
+
+    private async Task OpenConnectionWithRetryAsync(MySqlConnection connection, int maxAttempts = 5)
+    {
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                if (connection.State != System.Data.ConnectionState.Open)
+                    await connection.OpenAsync();
+                return;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                if (attempt < maxAttempts)
+                    await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(5000, 250 * attempt)));
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException("Unable to connect to MySQL after retries.");
     }
 }

@@ -25,7 +25,7 @@ public class LevelsRanks : BasePlugin
 {
     public override string ModuleName => "[LevelsRanks] Core";
 	public override string ModuleAuthor => "ABKAM designed by RoadSide Romeo & Wend4r";
-    public override string ModuleVersion => "v1.1.4";
+    public override string ModuleVersion => $"v{typeof(LevelsRanks).Assembly.GetName().Version?.ToString(3) ?? "1.2.0"}";
     public DatabaseConnection DatabaseConnection { get; set; } = null!;
     public Database Database { get; set; } = null!;
     public string? DbConnectionString = string.Empty;
@@ -107,7 +107,9 @@ public class LevelsRanks : BasePlugin
         _rankapi = new LevelsRanksApi(this, levelsRanksApiLogger);
         Capabilities.RegisterPluginCapability(_rankpluginCapability, () => _rankapi);
 
-        Task.Run(() => Database.CreateTable());
+        // Инициализация БД не блокирует загрузку игровых обработчиков и сама
+        // продолжает попытки до восстановления MySQL.
+        _ = Database.StartHealthCheckAsync();
 
 
         // lr_db_savedataplayer_mode = "1" (по умолчанию): батчим сохранение каждые 5 секунд,
@@ -132,6 +134,7 @@ public class LevelsRanks : BasePlugin
         {
             Task.Run(async () =>
             {
+                await Database.IsConnectionHealthyAsync();
                 foreach (var user in OnlineUsers.Values)
                 {
                     await Database.UpdateUsersInDbWithRetry(new List<User> { user });
