@@ -97,8 +97,8 @@ jobs:
         if: steps.vipcore.outputs.present == 'true'
         run: |
           set -e
-          dotnet publish "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_VIP_ExperienceMultiplier"
-          dotnet publish "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }} --no-restore -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_VIP_CustomFakeRank"
+          dotnet publish "modules/CS2-VIP-LR-ExperienceMultiplier/[VIP] [LR] ExperienceMultiplier.csproj" -c ${{ env.CONFIGURATION }} -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_VIP_ExperienceMultiplier"
+          dotnet publish "modules/CS2_VIP_LR_CustomFakeRank/VIP_CustomFakeRank.csproj" -c ${{ env.CONFIGURATION }} -p:PluginVersion=${{ steps.metadata.outputs.plugin_version }} -p:BuildNumber=${{ env.BUILD_NUMBER }} -o "$STAGE/plugins/LR_VIP_CustomFakeRank"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
