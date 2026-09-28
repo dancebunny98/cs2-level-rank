@@ -1171,6 +1171,7 @@ public class LevelsRanks : BasePlugin
                 return;
             }
 
+#pragma warning disable CS0619 // MenuManagerApi's compatibility overload is the contract shipped with this plugin.
             var menu = _api.NewMenu(PluginTitle);
 
             if (AdminManager.PlayerHasPermissions(player, AdminMenuFlag))
@@ -1425,6 +1426,8 @@ public class LevelsRanks : BasePlugin
 
         menu?.Open(player);
     }
+
+#pragma warning restore CS0619
 
     private void AdjustPlayerPoints(CCSPlayerController player, CCSPlayerController targetPlayer, int amount,
         bool isGrant)

@@ -3,9 +3,6 @@
         <TargetFramework>$(TargetFrameworkVersion)</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <!-- MenuManagerApi keeps this overload for compatibility and marks it obsolete;
-             the replacement is not available in the bundled API contract yet. -->
-        <NoWarn>$(NoWarn);CS0619</NoWarn>
 
         <!-- Core = единая сборка с РЕАЛИЗАЦИЕЙ. Публичный контракт (ILevelsRanksApi,
              User) живёт отдельно в Api/LevelsRanksApi.csproj и деплоится в shared/ -
