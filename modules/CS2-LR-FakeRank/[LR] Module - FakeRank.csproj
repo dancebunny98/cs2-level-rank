@@ -20,9 +20,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.366" />
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.376" />
     <PackageReference Include="Dapper" Version="2.1.24" />
-    <PackageReference Include="MySqlConnector" Version="2.3.1" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
 
     <!-- Private=false у обоих: и LevelsRanksApi, и FakeRanksApi - это разделяемые
          контракты (addons/counterstrikesharp/shared/...), их не нужно копировать
