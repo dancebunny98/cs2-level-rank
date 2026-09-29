@@ -55,7 +55,12 @@ public class LevelsRanksApi : ILevelsRanksApi
 
     public async Task<Dictionary<string, int>> GetCurrentRanksAsync()
     {
-        return await _levelsRanks.Database.GetCurrentRanksAsync();
+        var ranks = await _levelsRanks.Database.GetCurrentRanksAsync();
+        // The database is intentionally flushed in batches. Prefer the live value
+        // for connected players so TAB/tags never lag behind the in-memory state.
+        foreach (var (steamId, user) in _levelsRanks.OnlineUsers)
+            ranks[steamId] = user.Rank;
+        return ranks;
     }
 
     public ulong ConvertToSteamId64(string steamId)

@@ -154,6 +154,28 @@ public partial class LevelsRanks
     private async void ShowTopPlayersByExperience(CCSPlayerController player)
     {
         var topPlayers = await Database.GetTopPlayersByExperience(TopCount);
+
+        // Online users may have experience that is still waiting in the five-second
+        // database batch. Overlay their live values before sorting the result.
+        foreach (var index in Enumerable.Range(0, topPlayers.Count).ToList())
+        {
+            var steamId = topPlayers[index].SteamId;
+            if (steamId != null && OnlineUsers.TryGetValue(steamId, out var onlineUser))
+                topPlayers[index] = onlineUser;
+        }
+
+        foreach (var onlineUser in OnlineUsers.Values)
+        {
+            if (topPlayers.Any(user => user.SteamId == onlineUser.SteamId)) continue;
+            if (onlineUser.LastConnect <= 0) continue;
+            topPlayers.Add(onlineUser);
+        }
+
+        topPlayers = topPlayers
+            .OrderByDescending(user => user.Value)
+            .ThenBy(user => user.SteamId)
+            .Take(TopCount)
+            .ToList();
         var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_10_experience"]), null, null);
 
         for (var i = 0; i < topPlayers.Count; i++)

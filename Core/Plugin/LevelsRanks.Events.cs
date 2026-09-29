@@ -64,7 +64,12 @@ public partial class LevelsRanks
                     userFromDb.LastConnect = (int)currentTime;
                 }
 
-                Server.NextFrame(() => { OnlineUsers[steamIdStr] = userFromDb; });
+                Server.NextFrame(() =>
+                {
+                    OnlineUsers[steamIdStr] = userFromDb;
+                    // Recalculate even when the database contained an old/invalid rank.
+                    CheckAndUpdateRank(userFromDb);
+                });
             }
             catch (Exception e)
             {
@@ -118,57 +123,54 @@ public partial class LevelsRanks
 
     private void CheckAndUpdateRank(User user)
     {
+        var newRank = RanksSettings.GetRankForExperience(user.Value, StatisticType);
+        var oldRank = user.Rank;
+
+        // Update the shared in-memory value before scheduling notifications.  TAB and
+        // other modules read OnlineUsers directly, so deferring this assignment caused
+        // stale ranks and allowed a later database write to appear as a rollback.
+        if (newRank == oldRank) return;
+        user.Rank = newRank;
+        _userUpdateQueue.Enqueue(user);
+
         Server.NextFrame(() =>
         {
-            var newRank = RanksSettings.GetRankForExperience(user.Value, StatisticType);
-            if (newRank != user.Rank)
+            var steamIdStr = user.SteamId;
+            var player = Utilities.GetPlayers().FirstOrDefault(p =>
+                p.AuthorizedSteamID != null &&
+                SteamIdConverter.ConvertToSteamId(p.AuthorizedSteamID.SteamId64) == steamIdStr);
+
+            if (player != null)
             {
-                var steamIdStr = user.SteamId;
-
-                var player = Utilities.GetPlayers().FirstOrDefault(p =>
-                    p.AuthorizedSteamID != null &&
-                    SteamIdConverter.ConvertToSteamId(p.AuthorizedSteamID.SteamId64) == steamIdStr);
-
                 var rankName = Localizer[$"rank_{newRank}"];
 
-                if (player != null)
+                if (newRank > oldRank)
                 {
-                    if (newRank > user.Rank)
-                    {
-                        player.PrintToChat(
-                            ReplaceColorPlaceholders(Localizer["rank_up_message", rankName, user.Name!]));
+                    player.PrintToChat(
+                        ReplaceColorPlaceholders(Localizer["rank_up_message", rankName, user.Name!]));
 
-                        if (PlaySound) player.ExecuteClientCommand($"play {SoundLvlUp}");
+                    if (PlaySound) player.ExecuteClientCommand($"play {SoundLvlUp}");
 
-                        if (ShowLevelUpMessage)
-                            foreach (var otherPlayer in Utilities.GetPlayers().Where(p =>
-                                         p.AuthorizedSteamID != null && p.AuthorizedSteamID.SteamId64 !=
-                                         player.AuthorizedSteamID!.SteamId64))
-                                otherPlayer.PrintToChat(
-                                    ReplaceColorPlaceholders(Localizer["rank_up_broadcast", user.Name!, rankName]));
-                    }
-                    else
-                    {
-                        player.PrintToChat(
-                            ReplaceColorPlaceholders(Localizer["rank_down_message", rankName, user.Name!]));
-
-                        if (PlaySound) player.ExecuteClientCommand($"play {SoundLvlDown}");
-
-                        if (ShowLevelDownMessage)
-                            foreach (var otherPlayer in Utilities.GetPlayers().Where(p =>
-                                         p.AuthorizedSteamID != null && p.AuthorizedSteamID.SteamId64 !=
-                                         player.AuthorizedSteamID!.SteamId64))
-                                otherPlayer.PrintToChat(
-                                    ReplaceColorPlaceholders(Localizer["rank_down_broadcast", user.Name!, rankName]));
-                    }
-
-                    user.Rank = newRank;
-
-                    _userUpdateQueue.Enqueue(user);
+                    if (ShowLevelUpMessage)
+                        foreach (var otherPlayer in Utilities.GetPlayers().Where(p =>
+                                     p.AuthorizedSteamID != null && p.AuthorizedSteamID.SteamId64 !=
+                                     player.AuthorizedSteamID!.SteamId64))
+                            otherPlayer.PrintToChat(
+                                ReplaceColorPlaceholders(Localizer["rank_up_broadcast", user.Name!, rankName]));
                 }
                 else
                 {
-                    Logger.LogWarning($"Player with SteamID {steamIdStr} not found.");
+                    player.PrintToChat(
+                        ReplaceColorPlaceholders(Localizer["rank_down_message", rankName, user.Name!]));
+
+                    if (PlaySound) player.ExecuteClientCommand($"play {SoundLvlDown}");
+
+                    if (ShowLevelDownMessage)
+                        foreach (var otherPlayer in Utilities.GetPlayers().Where(p =>
+                                     p.AuthorizedSteamID != null && p.AuthorizedSteamID.SteamId64 !=
+                                     player.AuthorizedSteamID!.SteamId64))
+                            otherPlayer.PrintToChat(
+                                ReplaceColorPlaceholders(Localizer["rank_down_broadcast", user.Name!, rankName]));
                 }
             }
         });
