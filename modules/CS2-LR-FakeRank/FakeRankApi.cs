@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 
 public class PlayerRankApi : IPlayerRankApi
@@ -32,6 +33,7 @@ public class PlayerRankApi : IPlayerRankApi
 
         player.CompetitiveRanking = 0;
         player.CompetitiveRankType = 0;
+        MarkRankFieldsChanged(player);
     }
 
     public void SetCustomRank(CCSPlayerController player, int rank, int rankType)
@@ -49,6 +51,7 @@ public class PlayerRankApi : IPlayerRankApi
 
         player.CompetitiveRanking = rank;
         player.CompetitiveRankType = (sbyte)rankType;
+        MarkRankFieldsChanged(player);
 
         SavePlayerRankToFile(steamId, data);
     }
@@ -61,6 +64,7 @@ public class PlayerRankApi : IPlayerRankApi
         {
             player.CompetitiveRanking = originalRank.originalRank;
             player.CompetitiveRankType = (sbyte)originalRank.originalRankType;
+            MarkRankFieldsChanged(player);
             _originalRanks.Remove(steamId);
         }
 
@@ -84,6 +88,13 @@ public class PlayerRankApi : IPlayerRankApi
 
     /// <summary>Сбросить кэш игрока (при выходе), файл не трогаем.</summary>
     public static void Forget(ulong steamId) => _customCache.TryRemove(steamId, out _);
+
+    private static void MarkRankFieldsChanged(CCSPlayerController player)
+    {
+        Utilities.SetStateChanged(player, "CCSPlayerController", "m_iCompetitiveRankType");
+        Utilities.SetStateChanged(player, "CCSPlayerController", "m_iCompetitiveRanking");
+        Utilities.SetStateChanged(player, "CCSPlayerController", "m_iCompetitiveWins");
+    }
 
     private static void SavePlayerRankToFile(ulong steamId, PlayerRankData data)
     {

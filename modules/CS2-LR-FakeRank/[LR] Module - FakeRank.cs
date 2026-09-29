@@ -20,7 +20,7 @@ namespace LevelsRanksModuleFakeRank
     public class LevelsRanksModuleFakeRank : BasePlugin
     {
         public override string ModuleName => "[LR] Module - FakeRank";
-        public override string ModuleVersion => "1.0.13";
+        public override string ModuleVersion => "1.0.14";
         public override string ModuleAuthor => "ABKAM designed by RoadSide Romeo & Wend4r";
 
         private ILevelsRanksApi? _api;
@@ -50,6 +50,10 @@ namespace LevelsRanksModuleFakeRank
         // Диагностика (см. css_fakerank_debug): кто и когда откатывает ранг.
         private readonly ConcurrentDictionary<ulong, int> _rewrites = new();
         private readonly ConcurrentDictionary<ulong, (int rank, int type, int wins)> _lastForeign = new();
+        // Последний ранг, для которого мы уже отправляли клиентам обновление TAB.
+        // Движок может перезаписать поля контроллера, но это не является сменой LR-ранга
+        // и не должно порождать новый UserMessage (иначе TAB начинает мерцать).
+        private readonly ConcurrentDictionary<ulong, (int rank, int type)> _lastAdvertisedRanks = new();
         private readonly ConcurrentDictionary<string, int> _rewriteBuckets = new();
         private string _lastEventName = "none";
         private long _lastEventMs;
@@ -114,6 +118,7 @@ namespace LevelsRanksModuleFakeRank
             _playerRanks.TryRemove(steamId, out _);
             _steamIdStrings.TryRemove(steamId, out _);
             _lastForeign.TryRemove(steamId, out _);
+            _lastAdvertisedRanks.TryRemove(steamId, out _);
             _rewrites.TryRemove(steamId, out _);
             PlayerRankApi.Forget(steamId);
         }
@@ -184,6 +189,7 @@ namespace LevelsRanksModuleFakeRank
         private void EnforceRanks(bool sendMessage, string source)
         {
             var ranksChanged = false;
+            var advertisedRankChanged = false;
             var now = Environment.TickCount64;
 
             foreach (var player in Utilities.GetPlayers())
@@ -216,11 +222,26 @@ namespace LevelsRanksModuleFakeRank
                     player.CompetitiveRankType = (sbyte)rankType;
                     player.CompetitiveRanking = rank;
                     player.CompetitiveWins = 777;
+
+                    // Property setters меняют значение на сервере, но не всегда помечают
+                    // сетевое поле dirty. Без этого клиент может получить промежуточный
+                    // нулевой/нативный ранг между двумя тиками.
+                    Utilities.SetStateChanged(player, "CCSPlayerController", "m_iCompetitiveRankType");
+                    Utilities.SetStateChanged(player, "CCSPlayerController", "m_iCompetitiveRanking");
+                    Utilities.SetStateChanged(player, "CCSPlayerController", "m_iCompetitiveWins");
+
                     ranksChanged = true;
+
+                    if (!_lastAdvertisedRanks.TryGetValue(steamId64, out var advertised) ||
+                        advertised.rank != rank || advertised.type != rankType)
+                    {
+                        _lastAdvertisedRanks[steamId64] = (rank, rankType);
+                        advertisedRankChanged = true;
+                    }
                 }
             }
 
-            if (sendMessage && ranksChanged)
+            if (sendMessage && ranksChanged && advertisedRankChanged)
             {
                 var filter = new RecipientFilter();
                 foreach (var recipient in Utilities.GetPlayers())
