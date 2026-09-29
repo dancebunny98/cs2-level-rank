@@ -93,7 +93,7 @@ namespace LevelsRanksModuleFakeRank
             // Как в оригинале: ранг ПОСТОЯННО удерживается в OnTick.
             // Движок CS2 сам перезаписывает CompetitiveRanking/Type (спавн, раунд,
             // смена команды...), поэтому "применить один раз" даёт моргание.
-            RegisterListener<Listeners.OnTick>(OnTick);
+            // CheckTransmit is the single rank enforcement path.
 
             // Кто-то (по данным css_fakerank_debug - ~10 раз/сек у всех игроков) обнуляет
             // rank/wins ПОСЛЕ OnTick, но до отправки состояния клиентам. CheckTransmit -
@@ -167,18 +167,16 @@ namespace LevelsRanksModuleFakeRank
             return false;
         }
 
-        private int _lastTransmitTick = -1;
-
-        private void OnTick() => EnforceRanks(sendMessage: true, source: "tick");
+        private long _lastEnforceMs;
 
         private void OnCheckTransmit()
         {
-            var tick = Server.TickCount;
-            if (tick == _lastTransmitTick)
+            var now = Environment.TickCount64;
+            if (now - _lastEnforceMs < 100)
                 return;
 
-            _lastTransmitTick = tick;
-            EnforceRanks(sendMessage: false, source: "transmit");
+            _lastEnforceMs = now;
+            EnforceRanks(sendMessage: true, source: "transmit");
         }
 
         private void EnforceRanks(bool sendMessage, string source)
@@ -205,7 +203,7 @@ namespace LevelsRanksModuleFakeRank
                 if (player.CompetitiveRankType == (sbyte)rankType &&
                     player.CompetitiveRanking == rank)
                 {
-                    if (player.CompetitiveWins != 777)
+                    if (player.CompetitiveWins < 0)
                         _winsMismatch++; // только счётчик для css_fakerank_debug
                 }
                 else
@@ -215,7 +213,6 @@ namespace LevelsRanksModuleFakeRank
 
                     player.CompetitiveRankType = (sbyte)rankType;
                     player.CompetitiveRanking = rank;
-                    player.CompetitiveWins = 777;
 
                     if (sendMessage)
                     {
