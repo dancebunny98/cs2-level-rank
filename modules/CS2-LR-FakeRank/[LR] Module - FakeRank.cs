@@ -93,7 +93,7 @@ namespace LevelsRanksModuleFakeRank
             // Как в оригинале: ранг ПОСТОЯННО удерживается в OnTick.
             // Движок CS2 сам перезаписывает CompetitiveRanking/Type (спавн, раунд,
             // смена команды...), поэтому "применить один раз" даёт моргание.
-            // CheckTransmit is the single rank enforcement path.
+            RegisterListener<Listeners.OnTick>(OnTick);
 
             // Кто-то (по данным css_fakerank_debug - ~10 раз/сек у всех игроков) обнуляет
             // rank/wins ПОСЛЕ OnTick, но до отправки состояния клиентам. CheckTransmit -
@@ -167,21 +167,23 @@ namespace LevelsRanksModuleFakeRank
             return false;
         }
 
-        private long _lastEnforceMs;
+        private int _lastTransmitTick = -1;
+
+        private void OnTick() => EnforceRanks(sendMessage: true, source: "tick");
 
         private void OnCheckTransmit()
         {
-            var now = Environment.TickCount64;
-            if (now - _lastEnforceMs < 100)
+            var tick = Server.TickCount;
+            if (tick == _lastTransmitTick)
                 return;
 
-            _lastEnforceMs = now;
-            EnforceRanks(sendMessage: true, source: "transmit");
+            _lastTransmitTick = tick;
+            EnforceRanks(sendMessage: false, source: "transmit");
         }
 
         private void EnforceRanks(bool sendMessage, string source)
         {
-            RecipientFilter? filter = null;
+            var ranksChanged = false;
             var now = Environment.TickCount64;
 
             foreach (var player in Utilities.GetPlayers())
@@ -203,7 +205,7 @@ namespace LevelsRanksModuleFakeRank
                 if (player.CompetitiveRankType == (sbyte)rankType &&
                     player.CompetitiveRanking == rank)
                 {
-                    if (player.CompetitiveWins < 0)
+                    if (player.CompetitiveWins != 777)
                         _winsMismatch++; // только счётчик для css_fakerank_debug
                 }
                 else
@@ -213,17 +215,23 @@ namespace LevelsRanksModuleFakeRank
 
                     player.CompetitiveRankType = (sbyte)rankType;
                     player.CompetitiveRanking = rank;
-
-                    if (sendMessage)
-                    {
-                        filter ??= new RecipientFilter();
-                        filter.Add(player);
-                    }
+                    player.CompetitiveWins = 777;
+                    ranksChanged = true;
                 }
             }
 
-            if (filter != null && filter.Count > 0)
+            if (sendMessage && ranksChanged)
             {
+                var filter = new RecipientFilter();
+                foreach (var recipient in Utilities.GetPlayers())
+                {
+                    if (recipient.IsValid && !recipient.IsBot)
+                        filter.Add(recipient);
+                }
+
+                if (filter.Count == 0)
+                    return;
+
                 var msg = UserMessage.FromId(350);
                 msg.Send(filter);
             }
