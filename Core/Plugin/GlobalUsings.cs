@@ -16,4 +16,3 @@ global using LevelsRanksApi;
 global using MenuManager;
 global using Microsoft.Extensions.Localization;
 global using Microsoft.Extensions.Logging;
-global using Timer = System.Threading.Timer;
