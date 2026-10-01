@@ -137,21 +137,16 @@ public partial class LevelsRanks : BasePlugin
         RegisterEventHandlers();
         RegisterListener<Listeners.OnMapEnd>(() =>
         {
-            // Одним батчем сохраняем всех, кто сейчас онлайн (снимок берём сразу, в игровом потоке).
-            var snapshot = OnlineUsers.Values.ToList();
+            // На конце карты сохраняем все актуальные объекты. Запись проходит через тот же
+            // шлюз, что и сохранения очереди/выхода игрока, чтобы старый снимок не затёр новый.
+            var snapshot = OnlineUsers.Values
+                .Concat(_pendingSaves.Values)
+                .Concat(_userUpdateQueue.Drain())
+                .Distinct()
+                .ToList();
             if (snapshot.Count == 0) return;
 
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await Database.UpdateUsersInDbWithRetry(snapshot);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError($"Failed to save players on map end: {ex}");
-                }
-            });
+            _ = SaveUsersImmediatelyAsync(snapshot, "map end");
         });
     }
 
@@ -163,7 +158,8 @@ public partial class LevelsRanks : BasePlugin
             var snapshot = OnlineUsers.Values.Concat(_pendingSaves.Values).Distinct().ToList();
             snapshot.AddRange(_userUpdateQueue.Drain().Where(u => !snapshot.Contains(u)).ToList());
             if (snapshot.Count > 0)
-                Task.Run(() => Database.UpdateUsersInDb(snapshot)).Wait(TimeSpan.FromSeconds(5));
+                Task.Run(() => SaveUsersImmediatelyAsync(snapshot, "plugin unload"))
+                    .Wait(TimeSpan.FromSeconds(5));
         }
         catch (Exception ex)
         {

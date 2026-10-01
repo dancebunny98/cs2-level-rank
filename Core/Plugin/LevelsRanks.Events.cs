@@ -147,21 +147,16 @@ public partial class LevelsRanks
             // (реконнект, смена карты), он получит эти данные, а не устаревшую строку из БД.
             _pendingSaves[steamIdStr] = user;
 
-            Task.Run(async () =>
-            {
-                try
-                {
-                    await Database.UpdateUsersInDbWithRetry(new List<User> { user });
-                    _pendingSaves.TryRemove(new KeyValuePair<string, User>(steamIdStr, user));
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError($"Failed to save player data for {user.SteamId}: {ex}");
-                }
-            });
+            _ = SaveDisconnectedUserAsync(steamIdStr, user);
         }
 
         return HookResult.Continue;
+    }
+
+    private async Task SaveDisconnectedUserAsync(string steamIdStr, User user)
+    {
+        await SaveUsersImmediatelyAsync(new[] { user }, "player disconnect");
+        _pendingSaves.TryRemove(new KeyValuePair<string, User>(steamIdStr, user));
     }
 
     private void CheckAndUpdateRank(User user)

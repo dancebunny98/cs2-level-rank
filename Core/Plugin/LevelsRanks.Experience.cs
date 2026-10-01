@@ -181,4 +181,29 @@ public partial class LevelsRanks
             _queueGate.Release();
         }
     }
+
+    /// <summary>
+    /// Serializes urgent saves (map end and disconnect) with the periodic batch writer.
+    /// Without this, an older full-row snapshot could finish after a newer one and roll
+    /// back the player's value and rank in the database.
+    /// </summary>
+    private async Task SaveUsersImmediatelyAsync(IEnumerable<User> users, string reason)
+    {
+        var snapshot = users.Where(user => !string.IsNullOrWhiteSpace(user.SteamId)).Distinct().ToList();
+        if (snapshot.Count == 0) return;
+
+        await _queueGate.WaitAsync();
+        try
+        {
+            await Database.UpdateUsersInDbWithRetry(snapshot);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Failed to save players ({reason}): {ex}");
+        }
+        finally
+        {
+            _queueGate.Release();
+        }
+    }
 }
