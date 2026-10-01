@@ -157,24 +157,28 @@ public partial class LevelsRanks
 
     private async Task ProcessUserUpdateQueue()
     {
-        const int batchSize = 10;
+        // Одновременно работает только один сброс в БД (иначе при недоступной БД
+        // каждые 5 секунд плодились бы новые бесконечные ретраи).
+        if (!await _queueGate.WaitAsync(0)) return;
 
-        var usersToUpdate = new List<User>();
+        try
+        {
+            const int batchSize = 50;
+            var usersToUpdate = _userUpdateQueue.Drain();
 
-        while (_userUpdateQueue.Count > 0 && usersToUpdate.Count < batchSize)
-            if (_userUpdateQueue.TryDequeue(out var user))
-                usersToUpdate.Add(user);
-
-        if (usersToUpdate.Count > 0)
-            try
+            for (var i = 0; i < usersToUpdate.Count; i += batchSize)
             {
-                await Database.UpdateUsersInDbWithRetry(usersToUpdate);
+                var chunk = usersToUpdate.Skip(i).Take(batchSize).ToList();
+                await Database.UpdateUsersInDbWithRetry(chunk);
             }
-            catch (Exception e)
-            {
-                Logger.LogError($"Error updating users in database: {e}");
-            }
+        }
+        catch (Exception e)
+        {
+            Logger.LogError($"Error updating users in database: {e}");
+        }
+        finally
+        {
+            _queueGate.Release();
+        }
     }
-
-
 }

@@ -32,9 +32,7 @@ public partial class LevelsRanks
     private void OnClientAuthorized(CCSPlayerController player, SteamID steamId)
     {
         // Используем SteamID, переданный листенером напрямую, а не player.AuthorizedSteamID:
-        // на момент вызова это поле у игрока иногда ещё не проставлено движком, и обращение
-        // к нему через "!" роняло NullReferenceException, из-за чего игрок вообще не попадал
-        // в OnlineUsers (и, как следствие, у него не отображался ранг).
+        // на момент вызова это поле у игрока иногда ещё не проставлено движком.
         var steamIdStr = SteamIdConverter.ConvertToSteamId(steamId.SteamId64);
         var playerName = player.PlayerName;
 
@@ -42,40 +40,75 @@ public partial class LevelsRanks
         {
             try
             {
-                var userFromDb = await Database.GetUserFromDb(steamIdStr);
-                var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var userFromDb = await LoadOrCreateUserAsync(steamIdStr, playerName);
 
-                if (userFromDb == null)
-                {
-                    userFromDb = new User
-                    {
-                        SteamId = steamIdStr,
-                        ServerId = ServerId,
-                        Name = playerName,
-                        LastConnect = (int)currentTime,
-                        Value = StatisticType == "1" || StatisticType == "2" ? 1000 : StartPoints,
-                        Rank = 1
-                    };
-                    await Database.AddUserToDb(userFromDb);
-                }
-                else
-                {
-                    userFromDb.Name = playerName;
-                    userFromDb.LastConnect = (int)currentTime;
-                }
-
-                Server.NextFrame(() =>
-                {
-                    OnlineUsers[steamIdStr] = userFromDb;
-                    // Recalculate even when the database contained an old/invalid rank.
-                    CheckAndUpdateRank(userFromDb);
-                });
+                Server.NextFrame(() => RegisterOnlineUser(steamIdStr, userFromDb, playerName));
             }
             catch (Exception e)
             {
                 Logger.LogError(e.ToString());
             }
         });
+    }
+
+    /// <summary>
+    /// Читает игрока из БД, а если строки нет - создаёт. Если строка уже существует (гонка
+    /// двух авторизаций или дубликат ключа), берёт актуальные данные из БД, а НЕ новый
+    /// пустой объект с нулевым опытом - иначе следующее сохранение затёрло бы накопленное.
+    /// </summary>
+    private async Task<User> LoadOrCreateUserAsync(string steamIdStr, string playerName)
+    {
+        var user = await Database.GetUserFromDb(steamIdStr);
+        if (user != null) return user;
+
+        var fresh = new User
+        {
+            SteamId = steamIdStr,
+            ServerId = ServerId,
+            Name = playerName,
+            LastConnect = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            Value = StatisticType == "1" || StatisticType == "2" ? 1000 : StartPoints,
+            Rank = 1
+        };
+
+        if (await Database.AddUserToDb(fresh)) return fresh;
+
+        return await Database.GetUserFromDb(steamIdStr) ?? fresh;
+    }
+
+    /// <summary>
+    /// Выполняется в игровом потоке. Решает, какой объект User становится "живым".
+    /// Правило: данные в памяти всегда новее данных в БД (БД пишется батчами с задержкой),
+    /// поэтому объект из БД используется только если у нас нет ничего свежее.
+    /// </summary>
+    private void RegisterOnlineUser(string steamIdStr, User userFromDb, string playerName)
+    {
+        var now = (int)DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        User user;
+
+        if (OnlineUsers.TryGetValue(steamIdStr, out var live))
+        {
+            // Повторная авторизация (смена карты и т.п.) без отключения - память новее БД.
+            user = live;
+            user.Name = playerName;
+        }
+        else if (_pendingSaves.TryGetValue(steamIdStr, out var pending))
+        {
+            // Игрок только что вышел, и его сохранение ещё не завершилось - БД ещё старая.
+            user = pending;
+            user.Name = playerName;
+            user.LastConnect = now;
+        }
+        else
+        {
+            user = userFromDb;
+            user.Name = playerName;
+            user.LastConnect = now;
+        }
+
+        OnlineUsers[steamIdStr] = user;
+        // Recalculate even when the database contained an old/invalid rank.
+        CheckAndUpdateRank(user);
     }
 
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventPlayerConnectFull, GameEventInfo gameEventInfo)
@@ -96,20 +129,30 @@ public partial class LevelsRanks
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect eventPlayerDisconnect, GameEventInfo gameEventInfo)
     {
         var player = eventPlayerDisconnect.Userid;
-        if (player == null || player.AuthorizedSteamID == null) return HookResult.Continue;
+        if (player == null || player.IsBot) return HookResult.Continue;
 
-        var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
+        // При отключении AuthorizedSteamID часто уже null. Раньше из-за этого мы выходили
+        // из обработчика, игрок оставался в OnlineUsers и НЕ сохранялся при выходе.
+        var steamId64 = player.AuthorizedSteamID?.SteamId64 ?? player.SteamID;
+        if (steamId64 == 0) return HookResult.Continue;
+
+        var steamIdStr = SteamIdConverter.ConvertToSteamId(steamId64);
         if (OnlineUsers.TryRemove(steamIdStr, out var user))
         {
             var disconnectTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             user.Playtime += (int)(disconnectTime - user.LastConnect);
             user.LastConnect = (int)disconnectTime;
-            
+
+            // Пока запись не дошла до БД, держим объект здесь: если игрок тут же вернётся
+            // (реконнект, смена карты), он получит эти данные, а не устаревшую строку из БД.
+            _pendingSaves[steamIdStr] = user;
+
             Task.Run(async () =>
             {
                 try
                 {
                     await Database.UpdateUsersInDbWithRetry(new List<User> { user });
+                    _pendingSaves.TryRemove(new KeyValuePair<string, User>(steamIdStr, user));
                 }
                 catch (Exception ex)
                 {
@@ -181,45 +224,20 @@ public partial class LevelsRanks
     {
         List<CCSPlayerController>? players = null;
 
-
         await Server.NextFrameAsync(() => { players = Utilities.GetPlayers().ToList(); });
 
         foreach (var player in players!)
         {
-            if (player == null || player.AuthorizedSteamID == null) continue;
+            if (player == null || player.IsBot || player.AuthorizedSteamID == null) continue;
 
             var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
             var playerName = player.PlayerName;
 
             try
             {
-                var userFromDb = await Database.GetUserFromDb(steamIdStr);
-                var currentTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                var userFromDb = await LoadOrCreateUserAsync(steamIdStr, playerName);
 
-                if (userFromDb == null)
-                {
-                    userFromDb = new User
-                    {
-                        SteamId = steamIdStr,
-                        ServerId = ServerId,
-                        Name = playerName,
-                        LastConnect = (int)currentTime,
-                        Value = StatisticType == "1" || StatisticType == "2" ? 1000 : StartPoints
-                    };
-                    await Database.AddUserToDb(userFromDb);
-                }
-                else
-                {
-                    userFromDb.Name = playerName;
-                    userFromDb.LastConnect = (int)currentTime;
-                }
-
-
-                await Server.NextFrameAsync(() =>
-                {
-                    OnlineUsers[steamIdStr] = userFromDb;
-                    CheckAndUpdateRank(userFromDb);
-                });
+                await Server.NextFrameAsync(() => RegisterOnlineUser(steamIdStr, userFromDb, playerName));
             }
             catch (Exception e)
             {
@@ -227,6 +245,7 @@ public partial class LevelsRanks
             }
         }
     }
+
     private HookResult OnPlayerDeath(EventPlayerDeath eventPlayerDeath, GameEventInfo gameEventInfo)
     {
         var attacker = eventPlayerDeath.Attacker;

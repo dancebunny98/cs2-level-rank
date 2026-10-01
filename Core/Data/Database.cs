@@ -186,7 +186,8 @@ public class Database
         return null;
     }
 
-    public async Task AddUserToDb(User user)
+    /// <returns>true - строка создана; false - строка уже существовала (ключ дублируется).</returns>
+    public async Task<bool> AddUserToDb(User user)
     {
         while (true)
         {
@@ -216,12 +217,12 @@ public class Database
                 command.Parameters.AddWithValue("@playtime", user.Playtime);
                 command.Parameters.AddWithValue("@lastconnect", user.LastConnect);
                 await command.ExecuteNonQueryAsync();
-                return;
+                return true;
             }
             catch (Exception ex)
             {
                 if (ex is MySqlException { Number: 1062 })
-                    return;
+                    return false;
                 _logger.LogWarning("Could not create player {SteamId} in MySQL. Retrying: {Message}",
                     user.SteamId, ex.Message);
                 await Task.Delay(TimeSpan.FromSeconds(5), _healthCancellation.Token);

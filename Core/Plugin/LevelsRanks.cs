@@ -66,7 +66,12 @@ public partial class LevelsRanks : BasePlugin
     private bool _showResetMyStats;
     private long _resetMyStatsCooldown;
     private readonly ConcurrentDictionary<string, double> _experienceMultipliers = new();
-    private readonly ConcurrentQueue<User> _userUpdateQueue = new();
+    private readonly DirtyUserSet _userUpdateQueue = new();
+    private readonly SemaphoreSlim _queueGate = new(1, 1);
+
+    // Игроки, которые уже вышли (или сменили карту), но чьё сохранение в БД ещё не завершилось.
+    // Пока запись не дошла до БД, именно этот объект - самая свежая версия данных игрока.
+    private readonly ConcurrentDictionary<string, User> _pendingSaves = new();
     private readonly
         ConcurrentQueue<(User user, CCSPlayerController player, int expChange, string eventDescription, char color)>
         _expChangeQueue = new();
@@ -132,17 +137,40 @@ public partial class LevelsRanks : BasePlugin
         RegisterEventHandlers();
         RegisterListener<Listeners.OnMapEnd>(() =>
         {
+            // Одним батчем сохраняем всех, кто сейчас онлайн (снимок берём сразу, в игровом потоке).
+            var snapshot = OnlineUsers.Values.ToList();
+            if (snapshot.Count == 0) return;
+
             Task.Run(async () =>
             {
-                await Database.IsConnectionHealthyAsync();
-                foreach (var user in OnlineUsers.Values)
+                try
                 {
-                    await Database.UpdateUsersInDbWithRetry(new List<User> { user });
+                    await Database.UpdateUsersInDbWithRetry(snapshot);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError($"Failed to save players on map end: {ex}");
                 }
             });
         });
     }
-    
+
+    public override void Unload(bool hotReload)
+    {
+        // Остановка сервера / перезагрузка плагина: сохраняем всё, что ещё не дошло до БД.
+        try
+        {
+            var snapshot = OnlineUsers.Values.Concat(_pendingSaves.Values).Distinct().ToList();
+            snapshot.AddRange(_userUpdateQueue.Drain().Where(u => !snapshot.Contains(u)).ToList());
+            if (snapshot.Count > 0)
+                Task.Run(() => Database.UpdateUsersInDb(snapshot)).Wait(TimeSpan.FromSeconds(5));
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError($"Failed to save players on unload: {ex}");
+        }
+    }
+
     public override void OnAllPluginsLoaded(bool hotReload)
     {
         _api = _pluginCapability.Get();
