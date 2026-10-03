@@ -8,7 +8,11 @@ on:
     branches: [ "main", "master" ]
   workflow_dispatch: { }
 
+permissions:
+  contents: read
+
 env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   DOTNET_VERSION: "10.0.x"
   CONFIGURATION: Release
   STAGE: dist/addons/counterstrikesharp
@@ -32,8 +36,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p build-deps
-          mm_url=$(curl -fsSL https://api.github.com/repos/RRimmer/PanoramaMenuManagerCS2/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
-          vip_url=$(curl -fsSL https://api.github.com/repos/dancebunny98/cs2-VIPCorefork/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
+          mm_url=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -H "User-Agent: github-actions" https://api.github.com/repos/RRimmer/PanoramaMenuManagerCS2/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
+          vip_url=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -H "User-Agent: github-actions" https://api.github.com/repos/dancebunny98/cs2-VIPCorefork/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
           curl -fsSL "$mm_url" -o /tmp/menumanager.zip
           curl -fsSL "$vip_url" -o /tmp/vipcore.zip
           unzip -j -o /tmp/menumanager.zip '*/counterstrikesharp/shared/MenuManagerApi/MenuManagerApi.dll' -d build-deps

@@ -136,7 +136,28 @@ public partial class LevelsRanks
         if (OnlineUsers.TryGetValue(steamIdStr, out var user))
             CheckAndUpdateRank(user);
         else
-            Logger.LogWarning($"Player Online with SteamID {steamIdStr} not found in OnlineUsers.");
+        {
+            // OnClientAuthorized can arrive before the controller is ready. Use
+            // connect_full as a second loading path so the player is not left
+            // without rank data when that first callback was missed.
+            var playerName = player.PlayerName;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    var loadedUser = await LoadOrCreateUserAsync(steamIdStr, playerName);
+                    Server.NextFrame(() =>
+                    {
+                        if (player.IsValid)
+                            RegisterOnlineUser(steamIdStr, loadedUser, playerName);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Failed to load LR user on full connect: {SteamId}", steamIdStr);
+                }
+            });
+        }
 
         return HookResult.Continue;
     }

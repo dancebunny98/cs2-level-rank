@@ -44,7 +44,8 @@ public class LevelsRanksUnusualKills : BasePlugin
     {
         base.OnAllPluginsLoaded(hotReload);
 
-        _levelsRanksApi = _levelsRanksApiCapability.Get();
+        try { _levelsRanksApi = _levelsRanksApiCapability.Get(); }
+        catch (KeyNotFoundException) { AddTimer(2.0f, () => OnAllPluginsLoaded(true)); return; }
         if (_levelsRanksApi == null)
         {
             Console.WriteLine("[LR-UK] LevelsRanksApi is not initialized. Exiting Load method.");

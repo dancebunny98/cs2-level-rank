@@ -34,7 +34,8 @@ public class LevelsRanksModuleTag : BasePlugin
     {
         base.OnAllPluginsLoaded(hotReload);
 
-        _api = _apiCapability.Get();
+        try { _api = _apiCapability.Get(); }
+        catch (KeyNotFoundException) { AddTimer(2.0f, () => OnAllPluginsLoaded(true)); return; }
 
         if (_api == null)
         {

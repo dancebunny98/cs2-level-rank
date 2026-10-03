@@ -19,7 +19,9 @@ public class VipExperienceMultiplier : BasePlugin
     public override void OnAllPluginsLoaded(bool hotReload)
     {
         _api = PluginCapability.Get();
-        var levelsRanksApi = LevelsRanksCapability.Get();
+        ILevelsRanksApi? levelsRanksApi;
+        try { levelsRanksApi = LevelsRanksCapability.Get(); }
+        catch (KeyNotFoundException) { AddTimer(2.0f, () => OnAllPluginsLoaded(true)); return; }
 
         if (_api == null || levelsRanksApi == null) return;
 

@@ -28,7 +28,8 @@ namespace LevelsRanksExStatsWeapons
         public override void OnAllPluginsLoaded(bool hotReload)
         {
             base.OnAllPluginsLoaded(hotReload);
-            _levelsRanksApi = _levelsRanksApiCapability.Get();
+            try { _levelsRanksApi = _levelsRanksApiCapability.Get(); }
+            catch (KeyNotFoundException) { AddTimer(2.0f, () => OnAllPluginsLoaded(true)); return; }
 
             if (_levelsRanksApi == null)
             {

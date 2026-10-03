@@ -91,13 +91,14 @@ public partial class LevelsRanks
                 return;
             }
 
-            if (player.AuthorizedSteamID == null)
+            if (player.AuthorizedSteamID == null && player.SteamID == 0)
             {
                 player.PrintToChat(ReplaceColorPlaceholders(Localizer["user_data_not_found"]));
                 return;
             }
 
-            var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
+            var steamIdStr = SteamIdConverter.ConvertToSteamId(
+                player.AuthorizedSteamID?.SteamId64 ?? player.SteamID);
             if (!OnlineUsers.TryGetValue(steamIdStr, out var user))
             {
                 player.PrintToChat(ReplaceColorPlaceholders(Localizer["user_data_not_found"]));
