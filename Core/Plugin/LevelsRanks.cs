@@ -169,8 +169,23 @@ public partial class LevelsRanks : BasePlugin
 
     public override void OnAllPluginsLoaded(bool hotReload)
     {
-        _api = _pluginCapability.Get();
-        if (_api == null) Console.WriteLine("MenuManager Core not found...");
+        ResolveMenuApi();
+        AddTimer(2.0f, ResolveMenuApi);
+    }
+
+    private void ResolveMenuApi()
+    {
+        try
+        {
+            _api = _pluginCapability.Get();
+            if (_api == null)
+                Logger.LogWarning("MenuManager Core is not available; LevelsRanks menu will retry shortly.");
+        }
+        catch (Exception ex)
+        {
+            _api = null;
+            Logger.LogWarning(ex, "Unable to resolve MenuManager capability; LevelsRanks menu will use retry path.");
+        }
     }
 
     private void LoadConfig()
