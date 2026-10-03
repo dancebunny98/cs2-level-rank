@@ -6,11 +6,7 @@ public partial class LevelsRanks
     {
         RegisterListener<Listeners.OnClientAuthorized>((slot, id) =>
         {
-            var player = Utilities.GetPlayerFromSlot(slot);
-
-            if (player is null || !player.IsValid) return;
-
-            Server.NextFrame(() => OnClientAuthorized(player, id));
+            TryAuthorizePlayer(slot, id, 0);
         });
 
         RegisterEventHandler<EventPlayerDisconnect>(OnPlayerDisconnect);
@@ -27,6 +23,25 @@ public partial class LevelsRanks
         RegisterEventHandler<EventHostageKilled>(OnHostageKilled);
         RegisterEventHandler<EventRoundStart>(OnRoundStart);
         RegisterEventHandler<EventRoundMvp>(OnRoundMvp);
+    }
+
+    private void TryAuthorizePlayer(int slot, SteamID steamId, int attempt)
+    {
+        var player = Utilities.GetPlayerFromSlot(slot);
+        if (player is not null && player.IsValid)
+        {
+            Task.Run(() => OnClientAuthorized(player, steamId));
+            return;
+        }
+
+        if (attempt < 20)
+        {
+            AddTimer(0.25f, () => TryAuthorizePlayer(slot, steamId, attempt + 1));
+        }
+        else
+        {
+            Logger.LogWarning("Could not resolve player controller for authorized slot {Slot}", slot);
+        }
     }
 
     private void OnClientAuthorized(CCSPlayerController player, SteamID steamId)
