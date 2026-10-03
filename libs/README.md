@@ -1,5 +1,7 @@
 # libs/
 
+Shared API DLLs are downloaded by `.github/workflows/build.yml` from their upstream GitHub releases into `build-deps/`. Do not commit dependency binaries here.
+
 Сюда нужно вручную положить бинарники сторонних плагинов, от которых зависят
 VIP-модули (мы не распространяем и не собираем их из исходников):
 

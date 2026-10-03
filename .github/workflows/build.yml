@@ -27,6 +27,18 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Download shared API contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-deps
+          mm_url=$(curl -fsSL https://api.github.com/repos/RRimmer/PanoramaMenuManagerCS2/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
+          vip_url=$(curl -fsSL https://api.github.com/repos/dancebunny98/cs2-VIPCorefork/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
+          curl -fsSL "$mm_url" -o /tmp/menumanager.zip
+          curl -fsSL "$vip_url" -o /tmp/vipcore.zip
+          unzip -j -o /tmp/menumanager.zip '*/counterstrikesharp/shared/MenuManagerApi/MenuManagerApi.dll' -d build-deps
+          unzip -j -o /tmp/vipcore.zip '*/counterstrikesharp/shared/VipCoreApi/VipCoreApi.dll' -d build-deps
+
       - name: Read build metadata
         id: metadata
         shell: bash

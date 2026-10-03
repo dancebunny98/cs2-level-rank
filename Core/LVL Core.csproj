@@ -30,7 +30,7 @@
         <!-- MenuManagerApi - внешняя зависимость (плагин MenuManager), файл лежит
              рядом с этим csproj и не собирается нами -->
         <Reference Include="MenuManagerApi">
-            <HintPath>..\libs\MenuManagerApi.dll</HintPath>
+            <HintPath>$(MenuManagerApiPath)</HintPath>
             <Private>true</Private>
         </Reference>
     </ItemGroup>

@@ -22,7 +22,7 @@
     <!-- Внешняя зависимость (плагин VIP-CS2), собрать из исходников не можем -
          положите VipCoreApi.dll в /libs в корне репозитория перед сборкой -->
     <Reference Include="VipCoreApi">
-      <HintPath>..\..\libs\VipCoreApi.dll</HintPath>
+      <HintPath>$(VipCoreApiPath)</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>

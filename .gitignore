@@ -1,5 +1,6 @@
 bin/
 obj/
+build-deps/
 *.user
 .vs/
 dist/
