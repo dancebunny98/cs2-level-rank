@@ -129,9 +129,12 @@ public partial class LevelsRanks
     private HookResult OnPlayerConnectFull(EventPlayerConnectFull eventPlayerConnectFull, GameEventInfo gameEventInfo)
     {
         var player = eventPlayerConnectFull.Userid;
-        if (player == null || player.AuthorizedSteamID == null) return HookResult.Continue;
+        if (player == null) return HookResult.Continue;
 
-        var steamIdStr = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID.SteamId64);
+        var steamId64 = player.AuthorizedSteamID?.SteamId64 ?? player.SteamID;
+        if (steamId64 == 0) return HookResult.Continue;
+
+        var steamIdStr = SteamIdConverter.ConvertToSteamId(steamId64);
 
         if (OnlineUsers.TryGetValue(steamIdStr, out var user))
             CheckAndUpdateRank(user);
