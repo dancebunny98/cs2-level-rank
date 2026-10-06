@@ -15,6 +15,17 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Download MenuManager API contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build-deps
+          mm_url=$(curl -fsSL -H "Authorization: Bearer ${{ github.token }}" \
+            https://api.github.com/repos/RRimmer/PanoramaMenuManagerCS2/releases/latest \
+            | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
+          test -n "$mm_url"
+          curl -fsSL "$mm_url" -o /tmp/menumanager.zip
+          unzip -j -o /tmp/menumanager.zip '*/counterstrikesharp/shared/MenuManagerApi/MenuManagerApi.dll' -d build-deps
       - name: Restore with NuGet security audit
         run: dotnet restore LevelsRanks.sln -p:NuGetAudit=true -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1900%3BNU1901%3BNU1902%3BNU1903%3BNU1904%3BNU1905
       - name: Verify compatibility by building
