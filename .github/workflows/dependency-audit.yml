@@ -1,0 +1,29 @@
+name: Dependency audit
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore with NuGet security audit
+        run: dotnet restore LevelsRanks.sln -p:NuGetAudit=true -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1900%3BNU1901%3BNU1902%3BNU1903%3BNU1904%3BNU1905
+      - name: Verify compatibility by building
+        run: dotnet build LevelsRanks.sln -c Release --no-restore
+      - name: Check outdated packages
+        continue-on-error: true
+        run: dotnet list LevelsRanks.sln package --outdated --include-transitive | tee dependency-outdated.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-report
+          path: dependency-outdated.txt

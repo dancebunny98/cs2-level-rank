@@ -1,6 +1,10 @@
 bin/
 obj/
-build-deps/
-*.user
-.vs/
 dist/
+build-deps/
+.vs/
+.idea/
+*.user
+*.suo
+*.nupkg
+TestResults/
