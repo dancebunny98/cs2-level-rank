@@ -22,7 +22,7 @@ jobs:
           mkdir -p build-deps
           mm_url=$(curl -fsSL -H "Authorization: Bearer ${{ github.token }}" \
             https://api.github.com/repos/RRimmer/PanoramaMenuManagerCS2/releases/latest \
-            | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
+            | jq -r '.assets[] | select(.name | contains("cssharp") and endswith(".zip")) | .browser_download_url' | head -n1)
           test -n "$mm_url"
           curl -fsSL "$mm_url" -o /tmp/menumanager.zip
           unzip -j -o /tmp/menumanager.zip '*/counterstrikesharp/shared/MenuManagerApi/MenuManagerApi.dll' -d build-deps

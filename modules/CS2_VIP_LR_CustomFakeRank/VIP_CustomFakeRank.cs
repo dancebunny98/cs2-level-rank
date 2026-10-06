@@ -40,7 +40,8 @@ namespace VIP_LR_CustomFakeRank
 
         public override void Unload(bool hotReload)
         {
-            _vipApi?.UnRegisterFeature(_rankFeature);
+            if (_vipApi != null && _rankFeature != null)
+                _vipApi.UnRegisterFeature(_rankFeature);
         }
 
         private RankConfig LoadConfig()
@@ -127,7 +128,7 @@ namespace VIP_LR_CustomFakeRank
         private void ShowCategoryMenu(CCSPlayerController player)
         {
             var menuTitle = GetTranslatedText("CustomFakeRank.MenuTitle");
-            var menu = new ChatMenu(menuTitle);
+            var menu = CreateMenu(menuTitle);
 
             foreach (var category in _config.Categories)
             {
@@ -143,7 +144,7 @@ namespace VIP_LR_CustomFakeRank
         private void ShowRankMenu(CCSPlayerController player, RankCategory category)
         {
             var menuTitle = category.Name;
-            var menu = new ChatMenu(menuTitle);
+            var menu = CreateMenu(menuTitle);
 
             menu.AddMenuOption(GetTranslatedText("CustomFakeRank.Disable"), (controller, option) =>
             {

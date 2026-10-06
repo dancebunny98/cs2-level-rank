@@ -23,7 +23,7 @@
          положите VipCoreApi.dll в /libs в корне репозитория перед сборкой -->
     <Reference Include="VipCoreApi">
       <HintPath>$(VipCoreApiPath)</HintPath>
-      <Private>true</Private>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
 </Project>

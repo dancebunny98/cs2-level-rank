@@ -105,31 +105,42 @@ public partial class LevelsRanks
                 return;
             }
 
-            var menu = _api.GetMenu(PluginTitle, null, null);
-
-            if (AdminManager.PlayerHasPermissions(player, AdminMenuFlag))
-                menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["admin_panel"]),
-                    (p, option) => OpenAdminPanel(p));
-
-            menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["my_stats"]),
-                (p, option) => OpenUserStatsMenu(p, user));
-            menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["top_players"]),
-                (p, option) => OpenTopPlayersMenu(p));
-            if (ShowRankList)
-                menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["all_ranks"]),
-                    (p, option) => OpenAllRanksMenu(p));
-
-
-            foreach (var menuOption in CustomMenuOptions)
-                menu.AddMenuOption(menuOption.Name, (p, option) => menuOption.Action(p));
-
-            menu.Open(player);
+            OpenMainMenu(player, user);
         }
+    }
+
+    private void OpenMainMenu(CCSPlayerController player)
+    {
+        var steamId = SteamIdConverter.ConvertToSteamId(player.AuthorizedSteamID?.SteamId64 ?? player.SteamID);
+        if (OnlineUsers.TryGetValue(steamId, out var user))
+            OpenMainMenu(player, user);
+    }
+
+    private void OpenMainMenu(CCSPlayerController player, User user)
+    {
+        var menu = _api!.GetMenu(PluginTitle);
+
+        if (AdminManager.PlayerHasPermissions(player, AdminMenuFlag))
+            menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["admin_panel"]),
+                (p, option) => OpenAdminPanel(p));
+
+        menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["my_stats"]),
+            (p, option) => OpenUserStatsMenu(p, user));
+        menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["top_players"]),
+            (p, option) => OpenTopPlayersMenu(p));
+        if (ShowRankList)
+            menu.AddMenuOption(ReplaceColorPlaceholders(Localizer["all_ranks"]),
+                (p, option) => OpenAllRanksMenu(p));
+
+        foreach (var menuOption in CustomMenuOptions)
+            menu.AddMenuOption(menuOption.Name, (p, option) => menuOption.Action(p));
+
+        menu.Open(player);
     }
 
     private void OpenAllRanksMenu(CCSPlayerController player)
     {
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["all_ranks"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["all_ranks"]), backAction: OpenMainMenu);
 
         foreach (var rank in RanksSettings.Ranks.OrderBy(r => r.Key))
         {
@@ -144,7 +155,7 @@ public partial class LevelsRanks
 
     private void OpenTopPlayersMenu(CCSPlayerController player)
     {
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_players"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_players"]), backAction: OpenMainMenu);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["top_10_experience"]),
             (p, option) => ShowTopPlayersByExperience(p));
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["top_10_activity"]),
@@ -177,7 +188,7 @@ public partial class LevelsRanks
             .ThenBy(user => user.SteamId)
             .Take(TopCount)
             .ToList();
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_10_experience"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_10_experience"]), backAction: OpenTopPlayersMenu);
 
         for (var i = 0; i < topPlayers.Count; i++)
         {
@@ -207,7 +218,7 @@ public partial class LevelsRanks
     private async void ShowTopPlayersByPlaytime(CCSPlayerController player)
     {
         var topPlayers = await Database.GetTopPlayersByPlaytime(TopCount);
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_10_activity"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["top_10_activity"]), backAction: OpenTopPlayersMenu);
 
         for (var i = 0; i < topPlayers.Count; i++)
         {
@@ -227,7 +238,7 @@ public partial class LevelsRanks
 
     private void OpenUserStatsMenu(CCSPlayerController player, User user)
     {
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["my_stats"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["my_stats"]), backAction: OpenMainMenu);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["show_stats_in_chat"]),
             (p, option) => ShowUserStats(p, user));
         if (_showResetMyStats)
@@ -328,7 +339,7 @@ public partial class LevelsRanks
 
     private void OpenAdminPanel(CCSPlayerController player)
     {
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["admin_panel"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["admin_panel"]), backAction: OpenMainMenu);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["grant_revoke_points"]),
             (p, option) => OpenGrantRevokeMenu(p));
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["reload_plugin_settings"]),
@@ -348,7 +359,7 @@ public partial class LevelsRanks
 
     private void OpenGrantRevokeMenu(CCSPlayerController player)
     {
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["grant_revoke_points"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["grant_revoke_points"]), backAction: OpenAdminPanel);
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["grant_points"]),
             (p, option) => OpenPlayerSelectionMenu(p, true));
         menu?.AddMenuOption(ReplaceColorPlaceholders(Localizer["revoke_points"]),
@@ -358,7 +369,7 @@ public partial class LevelsRanks
 
     private void OpenPlayerSelectionMenu(CCSPlayerController player, bool isGrant)
     {
-        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["select_player"]), null, null);
+        var menu = _api?.GetMenu(ReplaceColorPlaceholders(Localizer["select_player"]), backAction: OpenGrantRevokeMenu);
         var players = Utilities.GetPlayers().Where(p => p.IsValid && !p.IsBot).ToList();
 
         foreach (var targetPlayer in players)
@@ -372,7 +383,7 @@ public partial class LevelsRanks
     {
         var menu = _api?.GetMenu(isGrant
             ? ReplaceColorPlaceholders(Localizer["grant_points"])
-            : ReplaceColorPlaceholders(Localizer["revoke_points"]), null, null);
+            : ReplaceColorPlaceholders(Localizer["revoke_points"]), backAction: p => OpenPlayerSelectionMenu(p, isGrant));
         var amounts = new[] { 10, 50, 100, 500 };
 
         foreach (var amount in amounts)

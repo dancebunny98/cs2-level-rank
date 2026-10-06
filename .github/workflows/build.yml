@@ -39,7 +39,10 @@ jobs:
           vip_url=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -H "User-Agent: github-actions" https://api.github.com/repos/dancebunny98/cs2-VIPCorefork/releases/latest | jq -r '.assets[] | select(.name | endswith(".zip")) | .browser_download_url' | head -n1)
           curl -fsSL "$vip_url" -o /tmp/vipcore.zip
           unzip -j -o /tmp/vipcore.zip '*/counterstrikesharp/shared/VipCoreApi/VipCoreApi.dll' -d build-deps
-          unzip -j -o /tmp/vipcore.zip '*/counterstrikesharp/shared/MenuManagerApi/MenuManagerApi.dll' -d build-deps
+          mm_url=$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -H "User-Agent: github-actions" https://api.github.com/repos/RRimmer/PanoramaMenuManagerCS2/releases/latest | jq -r '.assets[] | select(.name | contains("cssharp") and endswith(".zip")) | .browser_download_url' | head -n1)
+          test -n "$mm_url"
+          curl -fsSL "$mm_url" -o /tmp/menumanager.zip
+          unzip -j -o /tmp/menumanager.zip '*/counterstrikesharp/shared/MenuManagerApi/MenuManagerApi.dll' -d build-deps
 
       - name: Read build metadata
         id: metadata
