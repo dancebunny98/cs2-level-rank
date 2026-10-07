@@ -31,11 +31,12 @@
              рядом с этим csproj и не собирается нами -->
         <Reference Include="MenuManagerApi">
             <HintPath>$(MenuManagerApiPath)</HintPath>
-            <Private>true</Private>
+            <Private>false</Private>
         </Reference>
     </ItemGroup>
 
     <ItemGroup>
+        <None Include="README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
         <None Include="lang\**\*.json">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>

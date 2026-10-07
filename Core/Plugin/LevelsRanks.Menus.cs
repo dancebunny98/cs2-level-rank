@@ -279,9 +279,8 @@ public partial class LevelsRanks
                 var timeLeft = TimeSpan.FromSeconds(_resetMyStatsCooldown - (currentTime - lastResetTime));
                 Server.NextFrame(() =>
                 {
-                    player.PrintToChat(
-                        ReplaceColorPlaceholders(Localizer["reset_stats_cooldown", timeLeft.Days, timeLeft.Hours,
-                            timeLeft.Minutes, timeLeft.Seconds]));
+                    NotifyMenu(player, Localizer["reset_stats_cooldown", timeLeft.Days, timeLeft.Hours,
+                        timeLeft.Minutes, timeLeft.Seconds], MenuNotice.Warning);
                     _api?.CloseMenu(player);
                 });
                 return;
@@ -314,14 +313,14 @@ public partial class LevelsRanks
                 Server.NextFrame(() =>
                 {
                     CheckAndUpdateRank(user);
-                    player.PrintToChat(ReplaceColorPlaceholders(Localizer["stats_reset_success"]));
+                    NotifyMenu(player, Localizer["stats_reset_success"], MenuNotice.Success);
                 });
             }
             catch (Exception ex)
             {
                 Server.NextFrame(() =>
                 {
-                    player.PrintToChat(ReplaceColorPlaceholders(Localizer["stats_reset_failed"]));
+                    NotifyMenu(player, Localizer["stats_reset_failed"], MenuNotice.Error);
                 });
                 Logger.LogError($"Error updating user stats in database: {ex}");
             }
@@ -353,8 +352,7 @@ public partial class LevelsRanks
 
         LoadConfig();
 
-        player.PrintToChat(
-            ReplaceColorPlaceholders(Localizer["plugin_settings_reloaded"]));
+        NotifyMenu(player, Localizer["plugin_settings_reloaded"], MenuNotice.Success);
     }
 
     private void OpenGrantRevokeMenu(CCSPlayerController player)
@@ -403,15 +401,22 @@ public partial class LevelsRanks
             ApplyExperienceUpdateSyncWithoutLimits(user, targetPlayer, expChange,
                 isGrant ? Localizer["admin_grant_points"] : Localizer["admin_revoke_points"],
                 isGrant ? ChatColors.Green : ChatColors.DarkRed);
-            player.PrintToChat(
-                ReplaceColorPlaceholders(Localizer[isGrant ? "points_granted" : "points_revoked", amount,
-                    targetPlayer.PlayerName]));
+            NotifyMenu(player, Localizer[isGrant ? "points_granted" : "points_revoked", amount,
+                targetPlayer.PlayerName], MenuNotice.Success);
         }
         else
         {
-            player.PrintToChat(
-                ReplaceColorPlaceholders(Localizer["user_data_not_found_for_player", targetPlayer.PlayerName]));
+            NotifyMenu(player, Localizer["user_data_not_found_for_player", targetPlayer.PlayerName], MenuNotice.Error);
         }
+    }
+
+    private void NotifyMenu(CCSPlayerController player, string message, MenuNotice notice)
+    {
+        var colored = ReplaceColorPlaceholders(message);
+        if (_api?.GetMenuType(player) == MenuType.PanoramaMenu)
+            _api.Notify(player, PluginTitle, new string(colored.Where(c => !char.IsControl(c)).ToArray()), notice);
+        else
+            player.PrintToChat(colored);
     }
 
 }
